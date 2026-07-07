@@ -1,23 +1,49 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
+# pasinux .gitignore
+# Bare-metal x86 kernel project: GCC + NASM + GNU binutils + QEMU
+
+# ---- Makefile build output ----
+build/
+*.bin
+*.elf
+*.img
+*.iso
+*.map
+
+# ---- Object / intermediate files ----
+*.o
+*.obj
+*.a
+*.lib
+*.d
+*.i
+*.s
+*.lst
+
+# ---- Hosted-simulator / native test binaries ----
+# (the older `gcc -o kernel_sim ...` build path, plus any Windows binaries)
+kernel_sim
+kernel_sim.exe
+*.exe
+*.out
+
+# ---- Debugging ----
+.gdb_history
+.gdbinit.local
+*.qemu.log
+
+# ---- Optional: local cross-compiler build ----
+# Uncomment if you build a cross binutils/gcc toolchain inside the repo
+# cross/
+# opt/cross/
+
+# ---- Editors / IDEs ----
 .vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-files
-*.bclicense
-*.flf
-#Test results file
-TestResults.xml
+.idea/
+*.swp
+*.swo
+*~
+
+# ---- OS cruft ----
+.DS_Store
+Thumbs.db
+Desktop.ini
