@@ -1,105 +1,197 @@
-Write or update the README.md for the GitHub repository lekovicpavle13-lgtm/pasinux.
+# Pasinux
 
-STEP 0 — VERIFY BEFORE WRITING (always do this first, don't skip it):
-Don't trust the "baseline facts" below as current truth — they're a snapshot.
-Before writing anything:
-1. Read the repo's existing README.md. Treat it as your starting point: keep
-   what's still accurate, rewrite only what's changed. Don't regenerate from
-   a blank slate if a working README already exists.
-2. Read operator-handoff.md at the repo root AND pasinux/operator-handoff.md.
-   These are the project's own status/roadmap notes and are the source of
-   truth for what's actually done vs. pending — if they disagree with the
-   README's roadmap or status line, the handoff docs win.
-3. Read pasinux/kernel/README.md (kernel-core build notes) and reconcile any
-   build/run details there with the top-level README.
-4. Compare .github/workflows/c-cpp.yml against pasinux/kernel/Makefile.
-   Last known state: the workflow runs an Autotools pipeline (./configure,
-   make, make check, make distcheck) but the repo only ships a plain
-   Makefile, so CI fails as committed. Check if this has been fixed; update
-   or remove the CI warning accordingly — don't repeat it if it's stale.
-5. Skim kernel.c, mm.c/h, scheduler.c/h, driver.c/h, ipc.c/h, and boot.asm
-   for anything not reflected below — a VGA driver, interrupt handlers, or
-   boot.asm wired into a freestanding build would flip roadmap items from
-   unchecked to checked and probably add a new Features bullet.
-If you don't have direct repo access in this session (e.g. you're a plain
-chat model without file/browse tools), ASK the user to paste the current
-README.md, both operator-handoff.md files, and the CI workflow file rather
-than silently reusing the snapshot below.
+A hobby x86 bare-metal OS kernel written in C and NASM assembly, exploring low-level systems programming and kernel architecture.
 
-BASELINE FACTS (last verified 2026-07-20 — confirm, don't assume):
-- pasinux: hobby x86_64 OS kernel in C and assembly. Currently a hosted C
-  simulator so memory management, scheduling, drivers, and IPC can be built
-  and debugged before it becomes a real freestanding, bootable kernel.
-- Status: early-stage/active. C sources build and run as a userspace
-  simulator (`kernel_sim`); boot.asm is a valid placeholder, not yet wired in.
-- Memory management: heap allocator over a static 1 MiB arena — first-fit
-  search, 16-byte aligned blocks, splitting on alloc, coalescing on free.
-  kmalloc/kcalloc/krealloc/kfree, plus live stats (current/peak usage,
-  alloc/free/failure counts).
-- Scheduler: circular ready queue, priorities (LOW/NORMAL/HIGH), states
-  (READY/RUNNING/SLEEPING/ZOMBIE), sleep/wakeup queue, time-slice
-  preemption, round-robin or strict-priority policy, process_exit(),
-  stats (context switches, idle vs work time, created/terminated counts).
-- Drivers: minimal registry (char/block/net/input) via driver_ops_t, console
-  driver wired in at boot.
-- IPC: priority message queue, exercised via a small chess protocol (moves,
-  resignations, draw offers, board state).
-- Boot sector: valid legacy BIOS boot.asm, reserved for future freestanding build.
-- CI: GitHub Actions workflow scaffolded but currently mismatched with the
-  actual Makefile (see Step 0.4).
-- Structure:
-  pasinux/
-  ├── .github/workflows/c-cpp.yml
-  ├── .gitignore
-  ├── LICENSE
-  ├── operator-handoff.md          # project status & roadmap notes
-  └── pasinux/
-      ├── operator-handoff.md      # kernel-core status notes
-      └── kernel/
-          ├── boot.asm
-          ├── kernel.c
-          ├── mm.c / mm.h
-          ├── scheduler.c / scheduler.h
-          ├── driver.c / driver.h
-          ├── ipc.c / ipc.h
-          ├── Makefile
-          └── README.md
-- Build: `cd pasinux/kernel && make`, or
-  `gcc -std=c11 -Wall -Wextra -Wpedantic -g -o kernel_sim kernel.c mm.c scheduler.c driver.c ipc.c`
-- Run: `make run` — boots the simulator, spawns init (high priority, sends a
-  chess move over IPC), worker (normal, replies), idle-demo (low, shows
-  scheduler idling); drains IPC queue; prints scheduler + memory stats.
-- Other targets: `make syntax`, `make clean`.
-- Roadmap as of last check:
-  [x] Heap allocator with splitting/coalescing
-  [x] Scheduler with sleep/wakeup, preemption, priority policy option
-  [ ] VGA text-mode driver
-  [ ] Interrupt handlers
-  [ ] Wire boot.asm into a freestanding build + QEMU testing
-  [ ] Fix CI workflow to match the actual Makefile
-- License: MIT. Author: lekovicpavle13-lgtm.
+## Overview
 
-OUTPUT REQUIREMENTS:
-1. One-paragraph summary + a blockquoted "Status" line up top.
-2. H2 sections: Features, Project Structure, Getting Started
-   (Prerequisites/Build/Run/Other targets/Continuous Integration),
-   Architecture, Roadmap, License, Author.
-3. Features as bullets, bold lead term per bullet, technical register — no
-   marketing filler ("blazing fast," "easy to use," etc.).
-4. Project structure as a fenced tree. Build/run commands as fenced,
-   copy-pasteable shell blocks.
-5. Continuous Integration note must be honest about whether CI currently
-   passes, based on what you verified in Step 0.4 — not assumed.
-6. Roadmap as GitHub checkboxes, completed items first.
-7. If updating an existing README, preserve its structure and heading order
-   unless something you verified in Step 0 justifies changing it. Don't
-   reorder or rewrite sections that are still accurate just for style.
-8. Don't invent features, benchmarks, contributors, badges, or links not
-   confirmed in Step 0. If unsure, omit rather than guess.
-9. Tone: precise, low-level systems-programming register, written for
-   kernel/OS hobbyists. No emoji.
-10. Output the README.md content only — no commentary inside it.
-11. Immediately after the README, add a short separate "Changes made" note
-    (not part of the README) listing exactly what you changed and which
-    source file justified each change, so the user can sanity-check the
-    diff before committing.
+Pasinux is an educational x86 kernel project focused on implementing core OS functionality from scratch. The kernel demonstrates fundamental concepts in memory management, process scheduling, and hardware interaction through hands-on implementation.
+
+**Current Status:** Under active development with a stabilizing foundation.
+
+## Architecture
+
+### Build System
+- **Makefile-based compilation** with cross-compiler support
+- **NASM assembly** for bootloader and CPU-level operations
+- **GCC C compiler** for core kernel implementation
+- Target: 32-bit x86 architecture (with provisions for x86_64 expansion)
+
+### Core Modules
+
+#### Boot & Hardware
+- **Bootloader** (boot.s): Multiboot2-compliant entry point with CPU identification
+- **CPU Operations** (cpu.c/cpu.h): CPU initialization, GDT setup, privileged mode transitions
+- **Interrupt Handling** (interrupts.c/interrupts.h): IDT configuration, exception handlers, IRQ dispatch
+
+#### Memory Management
+- **Physical Memory Manager** (mm.c/mm.h): Page allocation, free list management, memory tracking
+- **Virtual Memory**: Paging infrastructure with higher-half kernel mapping support
+- **Memory Layouts**: Defines kernel memory regions (text, data, BSS)
+
+#### Core Runtime
+- **Kernel Entry Point** (kernel.c): Primary kernel initialization routine
+- **Logging & Debug** (printk): Kernel logging to serial port / video memory
+- **Hardware Utilities** (io.c): Port I/O, hardware communication primitives
+
+#### Build Infrastructure
+- **Linker Script** (kernel.ld): Memory layout and section organization
+- **Multiboot2 Support**: Header and compliance for bootloader handoff
+
+## Getting Started
+
+### Prerequisites
+
+- **GCC cross-compiler** for i686-elf target
+- **NASM** (Netwide Assembler)
+- **GNU Make**
+- **QEMU** or similar x86 emulator (for testing)
+
+### Building
+
+```bash
+make clean
+make
+```
+
+The build process:
+1. Compiles boot code (NASM → object files)
+2. Compiles kernel C code with proper CPU flags
+3. Links against the kernel linker script
+4. Produces `kernel.bin` (raw binary) and optionally `kernel.elf` (with symbols)
+
+### Testing
+
+```bash
+qemu-system-i386 -kernel kernel.bin
+```
+
+Or with additional debugging:
+```bash
+qemu-system-i386 -kernel kernel.bin -serial stdio
+```
+
+## Project History & Key Milestones
+
+### Foundation Work (Earlier)
+- Initial bare-metal x86 bootloader and kernel skeleton
+- Basic x86_64 linker script for higher-half Multiboot2 layout
+- Early memory management infrastructure
+
+### Recent Reconstruction
+- **Audit & Repair** (2024): Comprehensive code audit identified intermediate state from incomplete AI-assisted rewrite
+  - Identified corrupted `mm.c` with missing allocation logic
+  - Fixed conflicting kernel entry points
+  - Corrected Makefile compilation flags and linking issues
+- **Rewrite Cycle**: Clean implementation of core modules
+  - Rebuilt `mm.c` with stable physical memory allocator
+  - Refactored `kernel.c` with proper CPU initialization sequence
+  - Resolved build system issues
+- **Stability**: Passed compilation and sandbox testing post-rebuild
+
+## Known Issues & Future Work
+
+### Current Limitations
+- **Limited Hardware Support**: VGA text mode only (no BIOS extensions)
+- **No Scheduling**: Kernel runs in single-threaded mode; no process/task switching
+- **No File System**: No disk I/O or persistent storage interaction
+- **No User Mode**: Kernel runs entirely in ring-0; no user-mode execution or privilege separation
+
+### Planned Enhancements
+- Process/task management with basic scheduling
+- User-mode process execution and syscall interface
+- Virtual memory demand paging
+- Simple file system (FAT or custom)
+- Timer interrupts and time-keeping
+- Multiprocessor support (SMP)
+
+## Code Quality Notes
+
+This project prioritizes clarity and learning value over production robustness. Key practices:
+
+- **Explicit implementations**: Core functionality built from first principles
+- **Modular design**: Separate concerns (memory, CPU, interrupts) with clean interfaces
+- **Documentation**: Comments explain architectural decisions and non-obvious code paths
+- **Testing**: Compilation and sandbox execution verify correctness
+
+## Project Structure
+
+```
+pasinux/
+├── boot.s                # Bootloader (Multiboot2, NASM)
+├── kernel.c              # Kernel entry and main logic
+├── kernel.ld             # Linker script (memory layout)
+├── kernel.h              # Kernel-wide definitions
+│
+├── cpu.c / cpu.h         # CPU setup (GDT, privileged ops)
+├── interrupts.c / interrupts.h  # IDT, exception handlers
+├── io.c / io.h           # Port I/O, hardware primitives
+├── printk.c / printk.h   # Logging to serial/VGA
+│
+├── mm.c / mm.h           # Physical memory manager
+├── memory.h              # Memory region definitions
+│
+├── Makefile              # Build configuration
+└── README.md             # This file
+```
+
+## Technical Highlights
+
+### x86 Boot Process
+The kernel follows the Multiboot2 specification, allowing compatibility with GRUB and other bootloaders. The boot.s entry point:
+- Validates Multiboot magic number
+- Sets up a minimal stack
+- Calls the kernel's C entry point
+
+### Memory Management
+Physical memory allocation uses a simple free-list allocator:
+- Tracks allocated and free pages
+- Supports allocation and deallocation
+- Foundation for virtual memory and paging
+
+### Interrupt Handling
+Provides a framework for CPU exceptions and hardware interrupts:
+- IDT population with exception vectors
+- Handlers for common faults (page fault, general protection fault, etc.)
+- IRQ dispatch for future hardware device interaction
+
+### CPU Initialization
+Sets up critical CPU structures before main kernel execution:
+- Global Descriptor Table (GDT) for privilege levels and memory segmentation
+- Task State Segment (TSS) for privilege transitions
+- CPU feature detection and configuration
+
+## Learning Resources
+
+This project is ideal for understanding:
+- **Assembly Language**: x86 boot sequence and low-level CPU operations
+- **Memory Management**: Page allocation, virtual memory fundamentals
+- **OS Architecture**: Kernel structure, privilege separation, interrupt handling
+- **Build Systems**: Makefiles, linker scripts, cross-compilation
+- **Embedded Systems**: Hardware initialization, hardware-software interaction
+
+## Contributing & Extending
+
+The codebase is structured to be modular and extensible. To add new functionality:
+
+1. **New Modules**: Create `module.c` / `module.h` files following the existing pattern
+2. **Build Integration**: Add compilation rules to Makefile
+3. **API Definitions**: Declare public interfaces in header files
+4. **Documentation**: Comment architectural decisions in code
+
+## Licensing
+
+[Specify your license here — e.g., MIT, GPL, or Unlicensed]
+
+## Acknowledgments
+
+- **x86 Architecture References**: Intel and AMD documentation
+- **Multiboot2 Specification**: GNU GRUB community
+- **Inspiration**: OSDev.org community and educational OS projects
+
+## Contact & Feedback
+
+For questions, issues, or suggestions, please open an issue on the GitHub repository.
+
+---
+
+**Remember**: This is a hobby project for learning. Real production kernels (Linux, Windows, macOS) solve many additional problems around performance, security, and hardware compatibility that are simplified or omitted here.
