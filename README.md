@@ -1,212 +1,105 @@
-# pasinux
+Write or update the README.md for the GitHub repository lekovicpavle13-lgtm/pasinux.
 
-*A hobby x86 operating system kernel, moving from a hosted C simulator toward a real, freestanding, bootable kernel.*
+STEP 0 — VERIFY BEFORE WRITING (always do this first, don't skip it):
+Don't trust the "baseline facts" below as current truth — they're a snapshot.
+Before writing anything:
+1. Read the repo's existing README.md. Treat it as your starting point: keep
+   what's still accurate, rewrite only what's changed. Don't regenerate from
+   a blank slate if a working README already exists.
+2. Read operator-handoff.md at the repo root AND pasinux/operator-handoff.md.
+   These are the project's own status/roadmap notes and are the source of
+   truth for what's actually done vs. pending — if they disagree with the
+   README's roadmap or status line, the handoff docs win.
+3. Read pasinux/kernel/README.md (kernel-core build notes) and reconcile any
+   build/run details there with the top-level README.
+4. Compare .github/workflows/c-cpp.yml against pasinux/kernel/Makefile.
+   Last known state: the workflow runs an Autotools pipeline (./configure,
+   make, make check, make distcheck) but the repo only ships a plain
+   Makefile, so CI fails as committed. Check if this has been fixed; update
+   or remove the CI warning accordingly — don't repeat it if it's stale.
+5. Skim kernel.c, mm.c/h, scheduler.c/h, driver.c/h, ipc.c/h, and boot.asm
+   for anything not reflected below — a VGA driver, interrupt handlers, or
+   boot.asm wired into a freestanding build would flip roadmap items from
+   unchecked to checked and probably add a new Features bullet.
+If you don't have direct repo access in this session (e.g. you're a plain
+chat model without file/browse tools), ASK the user to paste the current
+README.md, both operator-handoff.md files, and the CI workflow file rather
+than silently reusing the snapshot below.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Top Language](https://img.shields.io/github/languages/top/lekovicpavle13-lgtm/pasinux)](https://github.com/lekovicpavle13-lgtm/pasinux)
-[![Status](https://img.shields.io/badge/status-active_development-yellow.svg)](#roadmap)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+BASELINE FACTS (last verified 2026-07-20 — confirm, don't assume):
+- pasinux: hobby x86_64 OS kernel in C and assembly. Currently a hosted C
+  simulator so memory management, scheduling, drivers, and IPC can be built
+  and debugged before it becomes a real freestanding, bootable kernel.
+- Status: early-stage/active. C sources build and run as a userspace
+  simulator (`kernel_sim`); boot.asm is a valid placeholder, not yet wired in.
+- Memory management: heap allocator over a static 1 MiB arena — first-fit
+  search, 16-byte aligned blocks, splitting on alloc, coalescing on free.
+  kmalloc/kcalloc/krealloc/kfree, plus live stats (current/peak usage,
+  alloc/free/failure counts).
+- Scheduler: circular ready queue, priorities (LOW/NORMAL/HIGH), states
+  (READY/RUNNING/SLEEPING/ZOMBIE), sleep/wakeup queue, time-slice
+  preemption, round-robin or strict-priority policy, process_exit(),
+  stats (context switches, idle vs work time, created/terminated counts).
+- Drivers: minimal registry (char/block/net/input) via driver_ops_t, console
+  driver wired in at boot.
+- IPC: priority message queue, exercised via a small chess protocol (moves,
+  resignations, draw offers, board state).
+- Boot sector: valid legacy BIOS boot.asm, reserved for future freestanding build.
+- CI: GitHub Actions workflow scaffolded but currently mismatched with the
+  actual Makefile (see Step 0.4).
+- Structure:
+  pasinux/
+  ├── .github/workflows/c-cpp.yml
+  ├── .gitignore
+  ├── LICENSE
+  ├── operator-handoff.md          # project status & roadmap notes
+  └── pasinux/
+      ├── operator-handoff.md      # kernel-core status notes
+      └── kernel/
+          ├── boot.asm
+          ├── kernel.c
+          ├── mm.c / mm.h
+          ├── scheduler.c / scheduler.h
+          ├── driver.c / driver.h
+          ├── ipc.c / ipc.h
+          ├── Makefile
+          └── README.md
+- Build: `cd pasinux/kernel && make`, or
+  `gcc -std=c11 -Wall -Wextra -Wpedantic -g -o kernel_sim kernel.c mm.c scheduler.c driver.c ipc.c`
+- Run: `make run` — boots the simulator, spawns init (high priority, sends a
+  chess move over IPC), worker (normal, replies), idle-demo (low, shows
+  scheduler idling); drains IPC queue; prints scheduler + memory stats.
+- Other targets: `make syntax`, `make clean`.
+- Roadmap as of last check:
+  [x] Heap allocator with splitting/coalescing
+  [x] Scheduler with sleep/wakeup, preemption, priority policy option
+  [ ] VGA text-mode driver
+  [ ] Interrupt handlers
+  [ ] Wire boot.asm into a freestanding build + QEMU testing
+  [ ] Fix CI workflow to match the actual Makefile
+- License: MIT. Author: lekovicpavle13-lgtm.
 
-## Table of Contents
-
-- [Overview](#overview)
-- [Subsystems](#subsystems)
-  - [Memory Management](#memory-management)
-  - [Process Scheduler](#process-scheduler)
-  - [Driver Framework \& IPC](#driver-framework--ipc)
-  - [Interrupts, Timer \& Keyboard](#interrupts-timer--keyboard)
-  - [Boot Loader](#boot-loader)
-- [Architecture](#architecture)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Build](#build)
-  - [Run](#run)
-- [Known Issues](#known-issues)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
-- [Author](#author)
-
-## Overview
-
-pasinux is a hobby x86 operating system kernel written in C and NASM assembly. It's in the middle of a deliberate architectural transition: the core subsystems (memory management, scheduling, drivers, IPC) were originally designed and exercised as a hosted C program that ran like an ordinary userspace executable, so they could be built and debugged with everyday tools. The project has since grown a real freestanding side — a legacy BIOS boot sector, a linker script, an IDT with ISR/IRQ stubs, a PIT timer driver, and a PS/2 keyboard driver — aimed at eventually booting `pasinux` as an actual kernel under QEMU.
-
-> Status: early-stage and under active development, with both build models currently present in the tree. See [Known Issues](#known-issues) for exactly where the hosted-C subsystems and the freestanding build currently disagree.
-
-## Subsystems
-
-### Memory Management
-
-Implemented in `kernel/mm.c` / `kernel/mm.h`.
-
-- A page-header-based heap allocator (`kmalloc`, `kcalloc`, `kfree`) with first-fit search and block splitting
-- Allocation/free counters
-- `mm.h` currently exposes a different, smaller API surface (heap bounds, allocation counters) than the one `mm.c` implements — see [Known Issues](#known-issues)
-
-### Process Scheduler
-
-Implemented in `kernel/scheduler.c` / `kernel/scheduler.h`.
-
-- A ready queue with three priority levels: `LOW`, `NORMAL`, `HIGH`
-- A process state machine: `READY`, `RUNNING`, `SLEEPING`, `ZOMBIE`
-- A sleep/wakeup queue and configurable time-slice preemption
-- A selectable scheduling policy (round-robin or strict priority)
-- `process_exit()` and runtime statistics (context switches, idle vs. work time, created/terminated counts)
-
-### Driver Framework & IPC
-
-Implemented in `kernel/driver.c` / `kernel/driver.h` and `kernel/ipc.c` / `kernel/ipc.h`.
-
-- A minimal driver registry (`driver_register`, `driver_lookup`) covering char, block, net, and input device types, with a common `driver_ops_t` interface
-- A working console driver registered at boot
-- A priority message queue (`msg_send` / `msg_recv`) for passing messages between processes
-- A small chess protocol (moves, resignations, draw offers, board state) used as a realistic workload to exercise the queue end to end
-
-### Interrupts, Timer & Keyboard
-
-Implemented in `kernel/idt.c`, `kernel/isr.asm`, `kernel/timer.c`, `kernel/keyboard.c`, `kernel/port_io.h`.
-
-- A 256-entry IDT with PIC remapping, plus NASM-generated ISR (0–31) and IRQ (32–47) stubs
-- A programmable interval timer (PIT) driver generating a configurable tick rate
-- A PS/2 keyboard driver with a scancode-to-ASCII table (including shift handling) and a circular input buffer
-- Low-level port I/O helpers (`inb`/`outb`/`inw`/`outw`/`inl`/`outl`)
-
-### Boot Loader
-
-Implemented in `kernel/boot.asm`, `kernel/entry.asm`, `kernel/linker.ld`.
-
-- A real-mode BIOS boot sector: enables the A20 line, loads the kernel image via LBA disk reads, and switches to protected mode
-- A 32-bit entry stub (`entry.asm`) that sets up its own stack, zeroes `.bss`, and calls `kernel_main()`
-- A linker script placing the kernel at the conventional 1 MiB load address, with a computed `_kernel_size` for the boot sector's disk-read loop
-
-## Architecture
-
-`kernel_main()` in `kernel.c` brings the subsystems up in a fixed order — heap, scheduler, drivers, then IPC — and creates three demo processes to put them to work:
-
-1. `init` (high priority) sends a starting chess position and a move over IPC.
-2. `worker` (normal priority) replies with a move of its own.
-3. `idle-demo` (low priority) shows the scheduler falling back to idle when there's no work to do.
-
-`scheduler_run()` then advances the scheduler for a fixed number of ticks, draining the IPC queue and printing scheduler and memory statistics once it completes.
-
-```mermaid
-flowchart TD
-    A["kernel_main() starts"] --> B["Heap allocator init (mm.c)"]
-    B --> C["Scheduler ready (scheduler.c)"]
-    C --> D["Driver registry ready (driver.c)"]
-    D --> E["IPC ready (ipc.c)"]
-    E --> F["Spawn init, priority HIGH"]
-    E --> G["Spawn worker, priority NORMAL"]
-    E --> H["Spawn idle-demo, priority LOW"]
-    F --> I["scheduler_run(): fixed-tick loop"]
-    G --> I
-    H --> I
-    I --> J["Drain IPC queue: chess protocol exchange"]
-    J --> K["Print scheduler and memory stats"]
-```
-
-Separately, on the freestanding side, `boot.asm` loads `kernel.bin` from disk and jumps to `entry.asm`'s `_start`, which zeroes `.bss` and calls the same `kernel_main()` — the intended path to booting this under QEMU once the two sides are reconciled (see [Known Issues](#known-issues)).
-
-## Project Structure
-
-```
-pasinux/
-├── LICENSE
-├── README.md
-└── kernel/
-    ├── Makefile
-    ├── README.md          # kernel-core build notes (currently describes the older hosted-simulator flow)
-    ├── boot.asm           # real-mode BIOS boot sector: A20, LBA disk load, protected-mode switch
-    ├── entry.asm           # 32-bit entry stub: stack setup, .bss zeroing, calls kernel_main()
-    ├── isr.asm             # NASM-generated ISR/IRQ stubs
-    ├── linker.ld           # linker script, 1 MiB load address
-    ├── kernel.c            # kernel entry point / demo process setup
-    ├── mm.c / mm.h         # heap allocator
-    ├── scheduler.c / scheduler.h    # process scheduler
-    ├── driver.c / driver.h         # driver registry + IPC message types
-    ├── ipc.c / ipc.h               # IPC dispatch + chess protocol handlers
-    ├── idt.c / idt.h               # IDT setup, PIC remap, interrupt dispatch
-    ├── timer.c / timer.h           # PIT timer driver
-    ├── keyboard.c / keyboard.h     # PS/2 keyboard driver
-    └── port_io.h                    # inb/outb-style port I/O helpers
-```
-
-## Getting Started
-
-### Prerequisites
-
-- `gcc` (targeting `i386`/`elf32`; a multilib install is needed on an x86_64 host — e.g. `gcc-multilib` on Debian/Ubuntu)
-- `nasm`
-- GNU binutils (`ld`, `objcopy`)
-- `qemu-system-i386` (for `make run`)
-- `make`
-
-### Build
-
-```bash
-cd kernel
-make
-```
-
-This assembles `entry.asm` and `isr.asm`, compiles the C sources with `-m32 -ffreestanding -nostdlib -nostdinc`, links them against `linker.ld` into `build/kernel.elf`, converts that to a flat `build/kernel.bin`, patches the sector count into `boot.asm`, assembles the boot sector, and concatenates everything into `build/disk.img`.
-
-As noted in [Known Issues](#known-issues), several of the C sources still call hosted libc functions (`printf`, `getchar`, `fwrite`) that aren't available under `-nostdinc -nostdlib`, so a clean `make` currently fails at the compile step for those files.
-
-### Run
-
-```bash
-make run
-```
-
-Boots `build/disk.img` in `qemu-system-i386` once it builds successfully.
-
-```bash
-make clean
-```
-
-Removes the `build/` directory.
-
-## Known Issues
-
-The tree currently mixes an older hosted-C design with a newer freestanding one, and a few rough edges from that transition are still visible. Flagging them here rather than glossing over them, since fixing any one of these is a reasonable, self-contained first contribution:
-
-- **`mm.c` / `mm.h` are out of sync.** `mm.h` declares heap bounds and counters that `mm.c` doesn't use, while `mm.c` defines its own `heap_start`/`heap_end` with a conflicting type and doesn't declare `kmalloc`/`kcalloc`/`kfree`/`init_memory` in the header at all. `coalesce_free_blocks()` and `heap_expand()` are currently stubs, and there's no `krealloc`.
-- **Hosted libc calls under a freestanding build.** `kernel.c`, `driver.c`, and `scheduler.c` call `printf`, `getchar`, and `fwrite`, but the Makefile compiles with `-ffreestanding -nostdlib -nostdinc`, which has no standard headers or C library to link against. These will need a minimal freestanding console/VGA writer in place of `<stdio.h>`.
-- **Duplicate `Makefile` target.** `kernel/Makefile` defines `C_SOURCES`, `C_OBJECTS`, and the `$(KERNEL_BIN)` rule twice (once for the base sources, once adding `idt.c timer.c keyboard.c` with the ISR object). GNU Make merges the prerequisites and keeps the second recipe, so this likely still builds, but it's worth collapsing into a single rule.
-- **Stray file-scope statements in `keyboard.c`.** A handful of call-like statements (`idt_init(); timer_init(100); keyboard_init(); asm volatile ("sti");`) sit between the global variable declarations and the function definitions, outside of any function body — these need to move into an actual init routine.
-- **Build artifacts committed to the repository.** `kernel/*.o` and `kernel/*.exe` are currently tracked in git. The `.gitignore` in this repo now excludes them going forward; existing ones can be dropped from version control with:
-  ```bash
-  git rm --cached kernel/*.o kernel/*.exe
-  git commit -m "Stop tracking build artifacts"
-  ```
-
-## Roadmap
-
-- [x] Heap allocator skeleton with first-fit search and block splitting
-- [x] Scheduler with sleep/wakeup, time-slice preemption, and a selectable priority policy
-- [x] Driver registry, console driver, and a priority IPC queue
-- [x] Real-mode boot sector: A20 enable, LBA disk load, protected-mode entry
-- [x] IDT, ISR/IRQ stubs, PIC remap
-- [x] PIT timer driver
-- [x] PS/2 keyboard driver
-- [ ] Reconcile the hosted C subsystems with the freestanding build (see [Known Issues](#known-issues))
-- [ ] VGA text-mode output for a freestanding console driver
-- [ ] Finish the heap allocator: coalescing, heap growth, `krealloc`
-- [ ] First successful end-to-end boot of `disk.img` in QEMU
-
-## Contributing
-
-pasinux is a hobby project and still early, which makes it a reasonable place to get hands-on kernel development experience. Contributions, bug reports, and questions are all welcome.
-
-- The [Known Issues](#known-issues) section lists several self-contained starting points.
-- For anything larger than a small fix, open an issue first to discuss the approach.
-- Keep C sources building cleanly under `-Wall -Wextra` at minimum.
-
-## License
-
-Distributed under the MIT License. See [LICENSE](LICENSE) for the full text.
-
-## Author
-
-[lekovicpavle13-lgtm](https://github.com/lekovicpavle13-lgtm)
+OUTPUT REQUIREMENTS:
+1. One-paragraph summary + a blockquoted "Status" line up top.
+2. H2 sections: Features, Project Structure, Getting Started
+   (Prerequisites/Build/Run/Other targets/Continuous Integration),
+   Architecture, Roadmap, License, Author.
+3. Features as bullets, bold lead term per bullet, technical register — no
+   marketing filler ("blazing fast," "easy to use," etc.).
+4. Project structure as a fenced tree. Build/run commands as fenced,
+   copy-pasteable shell blocks.
+5. Continuous Integration note must be honest about whether CI currently
+   passes, based on what you verified in Step 0.4 — not assumed.
+6. Roadmap as GitHub checkboxes, completed items first.
+7. If updating an existing README, preserve its structure and heading order
+   unless something you verified in Step 0 justifies changing it. Don't
+   reorder or rewrite sections that are still accurate just for style.
+8. Don't invent features, benchmarks, contributors, badges, or links not
+   confirmed in Step 0. If unsure, omit rather than guess.
+9. Tone: precise, low-level systems-programming register, written for
+   kernel/OS hobbyists. No emoji.
+10. Output the README.md content only — no commentary inside it.
+11. Immediately after the README, add a short separate "Changes made" note
+    (not part of the README) listing exactly what you changed and which
+    source file justified each change, so the user can sanity-check the
+    diff before committing.
