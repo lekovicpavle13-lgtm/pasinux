@@ -2,6 +2,7 @@
 
 A hobby x86 bare-metal OS kernel written in C and NASM assembly, exploring low-level systems programming and kernel architecture.
 
+67
 ## Overview
 
 Pasinux is an educational x86 kernel project focused on implementing core OS functionality from scratch. The kernel demonstrates fundamental concepts in memory management, process scheduling, and hardware interaction through hands-on implementation.
