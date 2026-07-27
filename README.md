@@ -1,198 +1,267 @@
-# Pasinux
+# pasinux
 
-A hobby x86 bare-metal OS kernel written in C and NASM assembly, exploring low-level systems programming and kernel architecture.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/LICENSE)
+[![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)
+[![Boot: x86_64 ASM](https://img.shields.io/badge/boot-x86__64%20ASM-informational.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/pasinux/kernel/boot.asm)
+[![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-9cf.svg)](#overview)
+[![Status: early-stage / active](https://img.shields.io/badge/status-early--stage%20%2F%20active-orange.svg)](#roadmap)
+[![Build: make](https://img.shields.io/badge/build-make-lightgrey.svg)](#getting-started)
+[![Type: OS Kernel](https://img.shields.io/badge/type-OS%20kernel-critical.svg)](#overview)
+[![Platform: hosted simulator](https://img.shields.io/badge/platform-hosted%20simulator-yellowgreen.svg)](#overview)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+[![Maintenance](https://img.shields.io/badge/maintained-yes-success.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/commits/main)
 
-67
+`os-kernel` · `x86-64` · `operating-system` · `c` · `assembly` · `bootloader` · `memory-allocator` · `process-scheduler` · `ipc` · `device-drivers` · `systems-programming` · `hobby-os`
+
+A hobby **x86_64 OS kernel** written in C and assembly. It's currently developed as a **hosted C simulator**, so its core subsystems — memory management, process scheduling, drivers, and IPC — can be designed, built, and debugged in userspace before the project grows into a real, freestanding, bootable kernel.
+
+> **Status:** early-stage / active development. The C sources build and run today as a userspace simulator (`kernel_sim`). The boot sector exists as a valid placeholder but is not yet wired into the build.
+
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Build](#build)
+  - [Run](#run)
+  - [Other Targets](#other-targets)
+- [Architecture](#architecture)
+  - [Boot Sequence](#boot-sequence)
+  - [Sample Output](#sample-output)
+- [Subsystems in Detail](#subsystems-in-detail)
+  - [Memory Management](#memory-management)
+  - [Process Scheduler](#process-scheduler)
+  - [Driver Framework](#driver-framework)
+  - [IPC](#ipc)
+- [Continuous Integration](#continuous-integration)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+- [Author](#author)
+
+---
+
 ## Overview
 
-Pasinux is an educational x86 kernel project focused on implementing core OS functionality from scratch. The kernel demonstrates fundamental concepts in memory management, process scheduling, and hardware interaction through hands-on implementation.
+**pasinux** is a from-scratch operating system kernel project targeting the **x86_64** architecture. Rather than jumping straight into bare-metal, freestanding development, the project takes a pragmatic "simulator-first" approach: every core kernel subsystem is written in portable, hosted C so it can be compiled and exercised as a normal userspace program (`kernel_sim`) with a standard compiler and no emulator required.
 
-**Current Status:** Under active development with a stabilizing foundation.
+This lets the design of the allocator, scheduler, driver registry, and IPC layer be iterated on and tested quickly, before the added complexity of a freestanding, no-libc, bootable environment is introduced. A legacy BIOS boot sector already exists in the tree as a placeholder for that next phase.
 
-## Architecture
+## Features
 
-### Build System
-- **Makefile-based compilation** with cross-compiler support
-- **NASM assembly** for bootloader and CPU-level operations
-- **GCC C compiler** for core kernel implementation
-- Target: 32-bit x86 architecture (with provisions for x86_64 expansion)
+- **Memory management** — a real heap allocator over a static 1 MiB arena, with:
+  - First-fit free-block search
+  - 16-byte aligned blocks
+  - Block splitting on allocation
+  - Coalescing of adjacent free blocks on `free`
+  - `kmalloc`, `kcalloc`, `krealloc`, `kfree`
+  - Live allocator stats: current/peak usage, allocation/free/failure counts
 
-### Core Modules
+- **Process scheduler** — a circular ready queue supporting:
+  - Priority levels: `LOW`, `NORMAL`, `HIGH`
+  - Process states: `READY`, `RUNNING`, `SLEEPING`, `ZOMBIE`
+  - A sleep/wakeup queue
+  - Configurable time-slice preemption
+  - Selectable **round-robin** or **strict-priority** scheduling policy
+  - `process_exit()` and graceful teardown
+  - Runtime stats: context switches, idle vs. work time, created/terminated process counts
 
-#### Boot & Hardware
-- **Bootloader** (boot.s): Multiboot2-compliant entry point with CPU identification
-- **CPU Operations** (cpu.c/cpu.h): CPU initialization, GDT setup, privileged mode transitions
-- **Interrupt Handling** (interrupts.c/interrupts.h): IDT configuration, exception handlers, IRQ dispatch
+- **Driver framework** — a minimal driver registry supporting `char`, `block`, `net`, and `input` device types through a common `driver_ops_t` interface, with a working console driver wired in at boot.
 
-#### Memory Management
-- **Physical Memory Manager** (mm.c/mm.h): Page allocation, free list management, memory tracking
-- **Virtual Memory**: Paging infrastructure with higher-half kernel mapping support
-- **Memory Layouts**: Defines kernel memory regions (text, data, BSS)
+- **IPC** — a priority message queue between processes, exercised end-to-end by a small **chess protocol** (moves, resignations, draw offers, board state) used as a realistic workload for the queue.
 
-#### Core Runtime
-- **Kernel Entry Point** (kernel.c): Primary kernel initialization routine
-- **Logging & Debug** (printk): Kernel logging to serial port / video memory
-- **Hardware Utilities** (io.c): Port I/O, hardware communication primitives
+- **Boot sector** — a valid legacy BIOS boot sector (`boot.asm`), reserved for the future freestanding build.
 
-#### Build Infrastructure
-- **Linker Script** (kernel.ld): Memory layout and section organization
-- **Multiboot2 Support**: Header and compliance for bootloader handoff
-
-## Getting Started
-
-### Prerequisites
-
-- **GCC cross-compiler** for i686-elf target
-- **NASM** (Netwide Assembler)
-- **GNU Make**
-- **QEMU** or similar x86 emulator (for testing)
-
-### Building
-
-```bash
-make clean
-make
-```
-
-The build process:
-1. Compiles boot code (NASM → object files)
-2. Compiles kernel C code with proper CPU flags
-3. Links against the kernel linker script
-4. Produces `kernel.bin` (raw binary) and optionally `kernel.elf` (with symbols)
-
-### Testing
-
-```bash
-qemu-system-i386 -kernel kernel.bin
-```
-
-Or with additional debugging:
-```bash
-qemu-system-i386 -kernel kernel.bin -serial stdio
-```
-
-## Project History & Key Milestones
-
-### Foundation Work (Earlier)
-- Initial bare-metal x86 bootloader and kernel skeleton
-- Basic x86_64 linker script for higher-half Multiboot2 layout
-- Early memory management infrastructure
-
-### Recent Reconstruction
-- **Audit & Repair** (2024): Comprehensive code audit identified intermediate state from incomplete AI-assisted rewrite
-  - Identified corrupted `mm.c` with missing allocation logic
-  - Fixed conflicting kernel entry points
-  - Corrected Makefile compilation flags and linking issues
-- **Rewrite Cycle**: Clean implementation of core modules
-  - Rebuilt `mm.c` with stable physical memory allocator
-  - Refactored `kernel.c` with proper CPU initialization sequence
-  - Resolved build system issues
-- **Stability**: Passed compilation and sandbox testing post-rebuild
-
-## Known Issues & Future Work
-
-### Current Limitations
-- **Limited Hardware Support**: VGA text mode only (no BIOS extensions)
-- **No Scheduling**: Kernel runs in single-threaded mode; no process/task switching
-- **No File System**: No disk I/O or persistent storage interaction
-- **No User Mode**: Kernel runs entirely in ring-0; no user-mode execution or privilege separation
-
-### Planned Enhancements
-- Process/task management with basic scheduling
-- User-mode process execution and syscall interface
-- Virtual memory demand paging
-- Simple file system (FAT or custom)
-- Timer interrupts and time-keeping
-- Multiprocessor support (SMP)
-
-## Code Quality Notes
-
-This project prioritizes clarity and learning value over production robustness. Key practices:
-
-- **Explicit implementations**: Core functionality built from first principles
-- **Modular design**: Separate concerns (memory, CPU, interrupts) with clean interfaces
-- **Documentation**: Comments explain architectural decisions and non-obvious code paths
-- **Testing**: Compilation and sandbox execution verify correctness
+- **CI scaffolding** — a GitHub Actions workflow for automated builds on push/PR (see [Continuous Integration](#continuous-integration) for its current status).
 
 ## Project Structure
 
 ```
 pasinux/
-├── boot.s                # Bootloader (Multiboot2, NASM)
-├── kernel.c              # Kernel entry and main logic
-├── kernel.ld             # Linker script (memory layout)
-├── kernel.h              # Kernel-wide definitions
-│
-├── cpu.c / cpu.h         # CPU setup (GDT, privileged ops)
-├── interrupts.c / interrupts.h  # IDT, exception handlers
-├── io.c / io.h           # Port I/O, hardware primitives
-├── printk.c / printk.h   # Logging to serial/VGA
-│
-├── mm.c / mm.h           # Physical memory manager
-├── memory.h              # Memory region definitions
-│
-├── Makefile              # Build configuration
-└── README.md             # This file
+├── .github/workflows/c-cpp.yml   # CI workflow
+├── .gitignore
+├── LICENSE                       # MIT License
+├── operator-handoff.md           # Project status & roadmap notes
+└── pasinux/
+    ├── operator-handoff.md       # Kernel-core status notes
+    └── kernel/
+        ├── boot.asm              # Legacy BIOS boot sector (placeholder)
+        ├── kernel.c               # Kernel entry point / demo process setup
+        ├── mm.c / mm.h            # Heap allocator
+        ├── scheduler.c / scheduler.h  # Process scheduler
+        ├── driver.c / driver.h    # Driver registry + IPC message types
+        ├── ipc.c / ipc.h          # IPC dispatch + chess protocol handlers
+        ├── Makefile
+        └── README.md              # Kernel-core build notes
 ```
 
-## Technical Highlights
+## Getting Started
 
-### x86 Boot Process
-The kernel follows the Multiboot2 specification, allowing compatibility with GRUB and other bootloaders. The boot.s entry point:
-- Validates Multiboot magic number
-- Sets up a minimal stack
-- Calls the kernel's C entry point
+### Prerequisites
 
-### Memory Management
-Physical memory allocation uses a simple free-list allocator:
-- Tracks allocated and free pages
-- Supports allocation and deallocation
-- Foundation for virtual memory and paging
+- `gcc` with C11 support
+- `make`
 
-### Interrupt Handling
-Provides a framework for CPU exceptions and hardware interrupts:
-- IDT population with exception vectors
-- Handlers for common faults (page fault, general protection fault, etc.)
-- IRQ dispatch for future hardware device interaction
+### Build
 
-### CPU Initialization
-Sets up critical CPU structures before main kernel execution:
-- Global Descriptor Table (GDT) for privilege levels and memory segmentation
-- Task State Segment (TSS) for privilege transitions
-- CPU feature detection and configuration
+```bash
+cd pasinux/kernel
+make
+```
 
-## Learning Resources
+Or invoke `gcc` directly:
 
-This project is ideal for understanding:
-- **Assembly Language**: x86 boot sequence and low-level CPU operations
-- **Memory Management**: Page allocation, virtual memory fundamentals
-- **OS Architecture**: Kernel structure, privilege separation, interrupt handling
-- **Build Systems**: Makefiles, linker scripts, cross-compilation
-- **Embedded Systems**: Hardware initialization, hardware-software interaction
+```bash
+gcc -std=c11 -Wall -Wextra -Wpedantic -g -o kernel_sim kernel.c mm.c scheduler.c driver.c ipc.c
+```
 
-## Contributing & Extending
+### Run
 
-The codebase is structured to be modular and extensible. To add new functionality:
+```bash
+make run
+```
 
-1. **New Modules**: Create `module.c` / `module.h` files following the existing pattern
-2. **Build Integration**: Add compilation rules to Makefile
-3. **API Definitions**: Declare public interfaces in header files
-4. **Documentation**: Comment architectural decisions in code
+This smoke-runs the simulator: it initializes memory, the scheduler, drivers, and IPC, spawns an `init` and a `worker` process, exchanges chess-protocol messages over IPC, drains the queue, and prints final scheduler and memory statistics.
 
-## Licensing
+### Other Targets
 
-[Specify your license here — e.g., MIT, GPL, or Unlicensed]
+```bash
+make syntax   # Syntax-check all sources without building
+make clean    # Remove build artifacts
+```
 
-## Acknowledgments
+## Architecture
 
-- **x86 Architecture References**: Intel and AMD documentation
-- **Multiboot2 Specification**: GNU GRUB community
-- **Inspiration**: OSDev.org community and educational OS projects
+`kernel_main()` in `kernel.c` brings the subsystems up in a fixed order and then exercises them with a small demo workload.
 
-## Contact & Feedback
+### Boot Sequence
 
-For questions, issues, or suggestions, please open an issue on the GitHub repository.
+1. **Heap** is initialized over a static 1 MiB arena.
+2. **Scheduler** is initialized with an empty ready queue.
+3. **Drivers** are registered — currently a console driver.
+4. **IPC** is initialized.
+5. Three demo processes are created to exercise the subsystems:
+   - **`init`** (high priority) — sends a starting chess position and a move over IPC.
+   - **`worker`** (normal priority) — replies with a move.
+   - **`idle-demo`** (low priority) — demonstrates the scheduler falling back to idle when there is no work.
+6. `scheduler_run()` advances the scheduler for a fixed number of ticks: ticking the sleep queue, preempting the running process once its time slice is spent, and selecting the next process (round-robin by default, or strict priority under the alternate policy).
+7. IPC messages queued during the run are drained.
+8. Final scheduler and memory statistics are printed before shutdown.
+
+### Sample Output
+
+```
+[KERNEL] pasinux kernel core starting
+[MM] heap ready: 1048576 bytes
+[SCHED] scheduler ready
+[DRIVER] registered console
+[DRIVER] driver core ready
+[IPC] ipc ready
+[SCHED] created init pid=1 priority=10
+[SCHED] created worker pid=2 priority=5
+[SCHED] created idle-demo pid=3 priority=1
+...
+[IPC] chess move from pid=1 to pid=1: e2e4 promotion=0 score=-49
+[SCHED] ticks=8 switches=8 created=3 terminated=0 idle=0 work=8
+[MM] allocations=6 frees=0 current=12672 peak=12672 failed=0
+[KERNEL] shutdown complete
+```
+
+## Subsystems in Detail
+
+### Memory Management (`mm.c` / `mm.h`)
+
+A classic freelist-based heap allocator, implemented over a fixed static arena (no dependency on the host OS's `malloc`):
+
+| Aspect | Behavior |
+|---|---|
+| Arena size | Static 1 MiB |
+| Search strategy | First-fit |
+| Alignment | 16-byte aligned blocks |
+| Allocation | Splits blocks when a free block is larger than requested |
+| Deallocation | Coalesces adjacent free blocks |
+| API | `kmalloc`, `kcalloc`, `krealloc`, `kfree` |
+| Observability | Current/peak usage, allocation/free/failure counters |
+
+### Process Scheduler (`scheduler.c` / `scheduler.h`)
+
+A cooperative/preemptive hybrid scheduler built around a circular ready queue:
+
+- Three priority tiers: `LOW`, `NORMAL`, `HIGH`
+- Process lifecycle states: `READY` → `RUNNING` → (`SLEEPING` ⇄ `RUNNING`) → `ZOMBIE`
+- A dedicated sleep/wakeup queue for blocked processes
+- Configurable time-slice length for preemptive round-robin scheduling
+- A second, selectable strict-priority policy for scenarios where priority ordering must always win
+- `process_exit()` for controlled process termination
+- Runtime statistics: total context switches, idle vs. active time, and created/terminated process counts
+
+### Driver Framework (`driver.c` / `driver.h`)
+
+A lightweight driver registry decoupling subsystem code from concrete device implementations:
+
+- Supports `char`, `block`, `net`, and `input` device classes
+- Drivers implement a common `driver_ops_t` interface
+- A console driver is registered and wired in automatically at boot, providing kernel logging output
+
+### IPC (`ipc.c` / `ipc.h`)
+
+A priority-ordered inter-process message queue:
+
+- Processes exchange typed messages through the queue
+- Includes a purpose-built **chess protocol** as a realistic test workload — moves, resignations, draw offers, and board-state messages — used to validate correctness and priority ordering across processes end to end
+
+## Continuous Integration
+
+`.github/workflows/c-cpp.yml` currently runs an Autotools-style pipeline (`./configure`, `make`, `make check`, `make distcheck`). The kernel currently ships a plain `Makefile` with no `configure` script and no `check` / `distcheck` targets, so **the workflow will not pass CI as committed**. To fix this, either:
+
+- add Autotools scaffolding (`configure.ac`, `Makefile.am`, etc.), **or**
+- simplify the workflow to call `make` / `make run` to match the current build system.
+
+This is tracked as an open item in the [Roadmap](#roadmap).
+
+## Roadmap
+
+- [x] Heap allocator with splitting and coalescing (`kmalloc` / `kcalloc` / `krealloc` / `kfree`)
+- [x] Scheduler with sleep/wakeup, time-slice preemption, and a selectable priority policy
+- [ ] VGA text-mode driver
+- [ ] Interrupt handlers
+- [ ] Wire `boot.asm` into a freestanding build and set up QEMU-based testing
+- [ ] Bring the CI workflow in line with the actual `Makefile` (see [Continuous Integration](#continuous-integration))
+
+## Topics
+
+For discoverability on GitHub, consider adding these as repository **Topics** (Settings → General → Topics):
+
+```
+os-kernel  x86-64  operating-system  c  assembly  bootloader
+memory-allocator  process-scheduler  ipc  device-drivers
+systems-programming  hobby-os  kernel-development  bare-metal
+```
+
+## Contributing
+
+This is an early-stage hobby project, and contributions, issues, and design discussion are welcome:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Build and smoke-test locally with `make && make run`
+4. Run `make syntax` to catch compile issues quickly
+5. Open a pull request describing the change and its motivation
+
+Bug reports and design proposals are best opened as [GitHub Issues](https://github.com/lekovicpavle13-lgtm/pasinux/issues).
+
+## License
+
+Distributed under the **MIT License**. See [`LICENSE`](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/LICENSE) for the full text.
+
+## Author
+
+**[lekovicpavle13-lgtm](https://github.com/lekovicpavle13-lgtm)**
 
 ---
 
-**Remember**: This is a hobby project for learning. Real production kernels (Linux, Windows, macOS) solve many additional problems around performance, security, and hardware compatibility that are simplified or omitted here.
+<p align="center"><i>pasinux — a kernel built one subsystem at a time.</i></p>
