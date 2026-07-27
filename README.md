@@ -1,12 +1,6 @@
 # pasinux
 
-# pasinux
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob//LICENSE)
-
-[![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)
-
-[![Boot: x86_64 ASM](https://img.shields.io/badge/boot-x86__64%20ASM-informational.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/pasinux/kernel/boot.asm)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob//LICENSE)[![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)[![Boot: x86_64 ASM](https://img.shields.io/badge/boot-x86__64%20ASM-informational.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/pasinux/kernel/boot.asm)
 
 [![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-9cf.svg)](#overview)
 
