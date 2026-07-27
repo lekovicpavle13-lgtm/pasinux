@@ -141,7 +141,9 @@ pasinux/
 ```
 
 ## Getting Started
-
+```
+git clone https://github.com/lekovicpavle13-lgtm/pasinux/edit/main
+```
 ### Prerequisites
 
 - `gcc` with C11 support
