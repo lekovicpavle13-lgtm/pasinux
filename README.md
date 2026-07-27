@@ -1,20 +1,6 @@
 # pasinux
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob//LICENSE)[![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)[![Boot: x86_64 ASM](https://img.shields.io/badge/boot-x86__64%20ASM-informational.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/pasinux/kernel/boot.asm)
-
-[![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-9cf.svg)](#overview)
-
-[![Status: stage / active](https://img.shields.io/badge/status-early--stage%20%2F%20active-orange.svg)](#roadmap)
-
-[![Build: make](https://img.shields.io/badge/build-make-lightgrey.svg)](#getting-started)
-
-[![Type: OS Kernel](https://img.shields.io/badge/type-OS%20kernel-critical.svg)](#overview)
-
-[![Platform: hosted simulator](https://img.shields.io/badge/platform-hosted%20simulator-yellowgreen.svg)](#overview)
-
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
-
-[![Maintenance](https://img.shields.io/badge/maintained-yes-success.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/commits/main)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob//LICENSE)[![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)[![Boot: x86_64 ASM](https://img.shields.io/badge/boot-x86__64%20ASM-informational.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/pasinux/kernel/boot.asm)[![Architecture: x86_64](https://img.shields.io/badge/arch-x86__64-9cf.svg)](#overview)[![Status: stage / active](https://img.shields.io/badge/status-early--stage%20%2F%20active-orange.svg)](#roadmap)[![Build: make](https://img.shields.io/badge/build-make-lightgrey.svg)](#getting-started)[![Type: OS Kernel](https://img.shields.io/badge/type-OS%20kernel-critical.svg)](#overview)[![Platform: hosted simulator](https://img.shields.io/badge/platform-hosted%20simulator-yellowgreen.svg)](#overview)[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)[![Maintenance](https://img.shields.io/badge/maintained-yes-success.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/commits/main)
 
 `os-kernel` · `x86-64` · `operating-system` · `c` · `assembly` · `bootloader` · `memory-allocator` · `process-scheduler` · `ipc` · `device-drivers` · `systems-programming` · `Os`
 
