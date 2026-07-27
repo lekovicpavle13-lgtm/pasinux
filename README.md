@@ -142,7 +142,7 @@ pasinux/
 
 ## Getting Started
 ```
-git clone https://github.com/lekovicpavle13-lgtm/pasinux/edit/main
+git clone https://github.com/lekovicpavle13-lgtm/pasinux
 ```
 ### Prerequisites
 
