@@ -1,4 +1,4 @@
-#                                                                               pasinux
+# pasinux
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/lekovicpavle13-lgtm/pasinux/blob/main/LICENSE)
 [![Language: C11](https://img.shields.io/badge/language-C11-blue.svg)](https://github.com/lekovicpavle13-lgtm/pasinux)
@@ -214,6 +214,15 @@ The freestanding image mirrors the same demo, but on real emulated hardware, dis
 7. Disk layout: **LBA 0** is the boot sector; **LBA 1–16** (8 KiB) holds the freestanding kernel image, flattened from the linked PE by `mkimage.py`.
 
 `linker.ld` + `mkimage.py` exist because the freestanding kernel is compiled and linked with MinGW's PE toolchain (`-m32 -ffreestanding`, no libc) and then flattened into a raw, position-correct binary that the boot sector can load directly at `0x10000` — no ELF or PE loader needed at boot time.
+
+**Actual `make qemu` boot output:**
+
+![pasinux booting in QEMU](qemu-boot.png)
+
+```
+pasinux freestanding kernel
+boot -> PM -> IDT/PIT -> preemptive OK
+```
 
 ### Sample Output
 
