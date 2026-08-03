@@ -1,8 +1,8 @@
-#ifndef MM_H
-#define MM_H
-
+#ifndef MM_FS_H
+#define MM_FS_H
+#include "io.h"
 #include <stddef.h>
-#include <stdint.h>
+
 
 #define KERNEL_HEAP_SIZE (1024u * 1024u)
 

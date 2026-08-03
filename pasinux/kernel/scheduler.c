@@ -1,9 +1,9 @@
 #include "scheduler.h"
-
 #include "mm.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <setjmp.h>
 
 #define PROCESS_STACK_SIZE 4096u
 
@@ -36,9 +36,9 @@ static void idle_entry(void) {
     printf("[SCHED] idle\n");
 }
 
-// The ready queue is a circular doubly-linked list with a sentinel head
-// (ready_queue points to the head node; the tail is head->prev). All
-// non-sentinel entries must be in the [READY] state.
+
+
+
 static void ready_insert_tail(process_t* process) {
     if (!ready_queue) {
         process->next = process;
@@ -57,7 +57,7 @@ static void ready_unlink(process_t* process) {
     if (!ready_queue || !process) {
         return;
     }
-    // Find the entry in the ring; if not present bail out.
+    
     process_t* cursor = ready_queue;
     bool found = false;
     do {
@@ -192,23 +192,41 @@ void scheduler_remove_process(process_t* process) {
 
 static process_t* pick_next(void) {
     if (!ready_queue) {
+        scheduler_stats.idle_time++;
         return &idle_process;
     }
 
-    process_t* best = ready_queue;
+    process_t* selected = NULL;
+
     if (scheduler_config.scheduling_policy == 1) {
-        for (process_t* cursor = ready_queue->next; cursor != ready_queue; cursor = cursor->next) {
-            // Prefer higher priority; break ties by lower accumulated cpu_time.
-            if (cursor->priority > best->priority ||
-                (cursor->priority == best->priority && cursor->cpu_time < best->cpu_time)) {
-                best = cursor;
+     
+        uint8_t best_priority = 0;
+        process_t* cursor = ready_queue;
+        do {
+            if (cursor->priority > best_priority) {
+                best_priority = cursor->priority;
             }
-        }
+            cursor = cursor->next;
+        } while (cursor != ready_queue);
+
+        cursor = ready_queue;
+        do {
+            if (cursor->priority == best_priority) {
+                if (!selected || cursor->cpu_time < selected->cpu_time) {
+                    selected = cursor;
+                }
+            }
+            cursor = cursor->next;
+        } while (cursor != ready_queue);
     } else {
-        // Round-robin: advance the head so the same entry isn't chosen twice in a row.
-        ready_queue = ready_queue->next;
+        
+        selected = ready_queue;
     }
-    return best;
+
+    ready_unlink(selected);
+
+    scheduler_stats.context_switches++;
+    return selected;
 }
 
 void scheduler_yield(void) {
@@ -216,7 +234,7 @@ void scheduler_yield(void) {
         return;
     }
     current_process->state = PROC_STATE_READY;
-    // Re-queue so the next pick_next can choose us again.
+    
     scheduler_add_process(current_process);
 }
 
@@ -273,32 +291,99 @@ void scheduler_run(uint64_t ticks) {
         current_process->state = PROC_STATE_RUNNING;
         current_process->cpu_time++;
 
-        if (current_process == &idle_process) {
-            scheduler_stats.idle_time++;
-        } else {
-            scheduler_stats.total_process_time++;
+
+        if (old && old->pc == 0) {
+            old->pc = setjmp(old->context);
         }
 
-        if (old != current_process) {
-            scheduler_stats.context_switches++;
-            printf("[SCHED] switch %s -> %s\n",
-                   old ? old->name : "none",
-                   current_process->name);
+
+        next->pc = setjmp(current_process->context);
+
+        if (old && old->pc != 0 && current_process->pc != 0 && old->pc == 0) {
+            longjmp(current_process->context, 1);
         }
+
 
         if (current_process->entry_point) {
             current_process->entry_point();
         }
 
-        if (current_process != &idle_process && current_process->state == PROC_STATE_RUNNING) {
-            // The entry point did not call yield/sleep/exit; mark READY so we
-            // re-enter the queue for the next tick.
-            current_process->state = PROC_STATE_READY;
-            if (!in_ready_queue(current_process)) {
-                ready_insert_tail(current_process);
+
+        if (current_process != &idle_process) {
+            scheduler_stats.total_process_time++;
+            if (current_process->state == PROC_STATE_RUNNING) {
+
+                process_exit(current_process);
             }
+
         }
     }
+}
+
+void process_exit(process_t* proc) {
+    if (!proc || proc == &idle_process) {
+        return;
+    }
+
+    printf("[SCHED] %s pid=%llu exiting\n",
+           proc->name, (unsigned long long)proc->pid);
+
+    scheduler_remove_process(proc);
+    proc->state = PROC_STATE_ZOMBIE;
+
+
+    process_t* cursor = ready_queue;
+    if (cursor) {
+        do {
+            if (cursor->ppid == proc->pid) {
+                cursor->ppid = idle_process.pid;
+            }
+            cursor = cursor->next;
+        } while (cursor != ready_queue);
+    }
+}
+
+void process_reap_zombies(void) {
+    process_t* cursor = ready_queue;
+    if (!cursor) {
+        return;
+    }
+
+    do {
+        process_t* next = cursor->next;
+        if (cursor->state == PROC_STATE_ZOMBIE) {
+            printf("[SCHED] reaping zombie %s pid=%llu\n",
+                   cursor->name, (unsigned long long)cursor->pid);
+            destroy_process(cursor);
+        }
+        cursor = next;
+    } while (cursor && cursor != ready_queue);
+}
+
+int process_join(process_t* proc, uint64_t timeout_ticks) {
+    if (!proc || proc == &idle_process) {
+        return -1;
+    }
+
+    for (uint64_t tick = 0; tick < timeout_ticks; tick++) {
+        if (proc->state == PROC_STATE_ZOMBIE) {
+            printf("[SCHED] joining %s pid=%llu\n",
+                   proc->name, (unsigned long long)proc->pid);
+            if (proc->stack_base) {
+                kfree(proc->stack_base);
+            }
+            kfree(proc);
+            scheduler_stats.processes_terminated++;
+            return 0;
+        }
+
+        scheduler_tick();
+    }
+
+    printf("[SCHED] join %s pid=%llu timed out (state=%u)\n",
+           proc->name, (unsigned long long)proc->pid,
+           proc->state);
+    return -1;
 }
 
 void scheduler_dump_state(void) {
@@ -331,4 +416,23 @@ void scheduler_dump_state(void) {
 
 scheduler_stats_t* get_scheduler_stats(void) {
     return &scheduler_stats;
+}
+
+process_t* scheduler_get_ready_head(void) {
+    return ready_queue;
+}
+
+process_t* process_get_next(const process_t* process) {
+    if (!process) {
+        return NULL;
+    }
+    return process->next;
+}
+
+uint64_t scheduler_get_idle_pid(void) {
+    return idle_process.pid;
+}
+
+scheduler_config_t* scheduler_get_config(void) {
+    return &scheduler_config;
 }

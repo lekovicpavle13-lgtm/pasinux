@@ -3,12 +3,12 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <setjmp.h>
 
 #define PROC_STATE_READY    0u
 #define PROC_STATE_RUNNING  1u
 #define PROC_STATE_SLEEPING 2u
 #define PROC_STATE_ZOMBIE   3u
-
 #define SCHED_PRIORITY_LOW     1u
 #define SCHED_PRIORITY_NORMAL  5u
 #define SCHED_PRIORITY_HIGH    10u
@@ -29,6 +29,8 @@ typedef struct process {
     struct process* prev;
     struct process* sleep_next;
     char name[32];
+    jmp_buf context;
+    int pc;  
 } process_t;
 
 typedef struct {
@@ -59,5 +61,18 @@ void scheduler_run(uint64_t ticks);
 void scheduler_dump_state(void);
 process_t* scheduler_get_current(void);
 scheduler_stats_t* get_scheduler_stats(void);
+
+
+
+
+process_t* scheduler_get_ready_head(void);
+process_t* process_get_next(const process_t* process);
+uint64_t scheduler_get_idle_pid(void);
+scheduler_config_t* scheduler_get_config(void);
+
+
+void process_exit(process_t* proc);
+int process_join(process_t* proc, uint64_t timeout_ticks);
+void process_reap_zombies(void);
 
 #endif

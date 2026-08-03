@@ -1,7 +1,6 @@
 #include "driver.h"
-
+#include"io.h"
 #include "scheduler.h"
-
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -144,6 +143,14 @@ driver_t* driver_lookup(const char* name) {
     return NULL;
 }
 
+driver_t* driver_get_list_head(void) {
+    return driver_list;
+}
+
+uint64_t ipc_pending_count(void) {
+    return kernel_msg_queue.msg_count;
+}
+
 int msg_send(uint64_t dst_pid, const void* data, size_t size, uint8_t priority) {
     if (!data || size == 0 || priority > 3u || size > IPC_MAX_PAYLOAD) {
         return -1;
@@ -154,8 +161,8 @@ int msg_send(uint64_t dst_pid, const void* data, size_t size, uint8_t priority) 
         return -1;
     }
 
-    // Source pid comes from the currently running process; treat the idle
-    // sentinel as a valid sender of pid 0 instead of masking the real pid.
+    
+    
     process_t* current = scheduler_get_current();
     uint64_t src_pid = current ? current->pid : 0;
     msg->src_pid = src_pid;

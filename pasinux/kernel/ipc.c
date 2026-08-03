@@ -1,6 +1,7 @@
 #include "ipc.h"
-
+#include "io.h"
 #include <stdio.h>
+
 
 void ipc_init(void) {
     printf("[IPC] ipc ready\n");
