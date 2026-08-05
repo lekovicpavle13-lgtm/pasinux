@@ -6,6 +6,30 @@
 #include "timer.h"
 #include "vga.h"
 
+static irq_handler_t g_irq_handlers[16];
+
+void irq_init_handlers(void) {
+    for (uint32_t i = 0u; i < 16u; ++i) {
+        g_irq_handlers[i] = (irq_handler_t)0;
+    }
+}
+
+int irq_register(uint8_t irq, irq_handler_t handler) {
+    if (irq >= 16u || handler == (irq_handler_t)0) {
+        return -1;
+    }
+    g_irq_handlers[irq] = handler;
+    return 0;
+}
+
+int irq_unregister(uint8_t irq) {
+    if (irq >= 16u) {
+        return -1;
+    }
+    g_irq_handlers[irq] = (irq_handler_t)0;
+    return 0;
+}
+
 void pic_send_eoi(uint8_t irq) {
     if (irq >= 8u) {
         outb(0xA0, 0x20);
@@ -24,6 +48,8 @@ void interrupt_dispatch(interrupt_frame_t* frame) {
             timer_irq();
         } else if (irq == 1u) {
             keyboard_irq();
+        } else if (g_irq_handlers[irq] != (irq_handler_t)0) {
+            g_irq_handlers[irq]();
         }
         pic_send_eoi(irq);
         return;

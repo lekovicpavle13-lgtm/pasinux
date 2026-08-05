@@ -1,9 +1,15 @@
 #include "driver_fs.h"
 #include "gdt.h"
 #include "idt.h"
+#include "interrupt.h"
 #include "keyboard.h"
 #include "mm_fs.h"
+#include "net_arp.h"
+#include "net_eth.h"
+#include "net_tcp.h"
 #include "paging.h"
+#include "pci.h"
+#include "rtl8139.h"
 #include "sched_fs.h"
 #include "serial.h"
 #include "syscall.h"
@@ -69,12 +75,17 @@ static void freestanding_subsystems_up(void) {
     idt_init();
     serial_puts("[IDT] IDT loaded, PIC remapped, PIT at 100 Hz, keyboard IRQ1\n");
 
+    irq_init_handlers();
+    serial_puts("[IRQ] handler table initialized\n");
+
     sched_fs_init();
     serial_puts("[SCHED] scheduler ready\n");
 
     drivers_init_fs();
 
     serial_puts("[IPC] ipc ready\n");
+
+    pci_scan_all();
 }
 
 static void ring3_demo(void){
@@ -148,7 +159,10 @@ static void vga_shell_help(void) {
     vga_puts("  echo <text> echo text back\n");
     vga_puts("  sudo <cmd>  execute command as root\n");
     vga_puts("  neofetch    show system info\n");
-}
+    vga_puts("  pci         list PCI devices\n");
+    vga_puts("  netstat     show NIC status\n");
+    vga_puts("  arp         show ARP cache\n");
+    }
 
 static void vga_shell_ps(void) {
     char buf[32];
@@ -219,6 +233,42 @@ static void vga_shell_dump(void) {
     vga_shell_ps();
 }
 
+static void vga_shell_pci(void) {
+    pci_scan_all();
+}
+
+static void vga_shell_netstat(void) {
+    rtl8139_t* nic = rtl8139_get();
+    if (!nic || nic->io_base == 0u) {
+        vga_puts("NIC: not initialized\n");
+        return;
+    }
+    char buf[12];
+    vga_puts("RTL8139 NIC:\n");
+    vga_puts("  IO base: 0x");
+    {
+        const char* hex = "0123456789ABCDEF";
+        uint16_t io = nic->io_base;
+        buf[0] = hex[(io >> 12) & 0x0Fu];
+        buf[1] = hex[(io >> 8) & 0x0Fu];
+        buf[2] = hex[(io >> 4) & 0x0Fu];
+        buf[3] = hex[io & 0x0Fu];
+        buf[4] = '\0';
+        vga_puts(buf);
+    }
+    vga_puts("\n");
+    u32_to_str(nic->packet_count, buf, sizeof(buf));
+    vga_puts("  packets: "); vga_puts(buf); vga_puts("\n");
+    u32_to_str(nic->byte_count, buf, sizeof(buf));
+    vga_puts("  bytes: "); vga_puts(buf); vga_puts("\n");
+}
+
+static void vga_shell_arp(void) {
+    arp_print_cache();
+    /* ARP cache only prints to serial, so let user know */
+    vga_puts("Check serial for ARP cache\n");
+}
+
 static void vga_shell_neofetch(void) {
     char buf[32];
     vga_puts("  ______   ___   _   _  _  _  _   _\n");
@@ -278,6 +328,12 @@ static void vga_shell_run(const char *line) {
         }
     } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 'o') {
         vga_shell_neofetch();
+    } else if (cmd[0] == 'p' && cmd[1] == 'c' && cmd[2] == 'i' && cmd[3] == '\0') {
+        vga_shell_pci();
+    } else if (cmd[0] == 'n' && cmd[1] == 'e' && cmd[2] == 't' && cmd[3] == 's') {
+        vga_shell_netstat();
+    } else if (cmd[0] == 'a' && cmd[1] == 'r' && cmd[2] == 'p' && cmd[3] == '\0') {
+        vga_shell_arp();
     } else {
         vga_puts("unknown: ");
         vga_puts(line);
@@ -330,14 +386,34 @@ void kmain(void) {
         vga_write(3, 0, "Timer/PIT: STALLED!!       ");
     }
 
+    /* Init RTL8139 NIC if present on PCI bus */
+    {
+        uint16_t rtl_addr = pci_find_device(RTL8139_VENDOR_ID, RTL8139_DEVICE_ID);
+        if (rtl_addr != PCI_NOT_FOUND) {
+            serial_puts("[NET] RTL8139 found, initializing...\n");
+            if (rtl8139_init(rtl_addr, rtl8139_get()) == 0) {
+                serial_puts("[NET] RTL8139 ready\n");
+                net_set_mac(rtl8139_get()->mac);
+                arp_init();
+                tcp_init();
+                serial_puts("[NET] TCP/IP stack initialized\n");
+            } else {
+                serial_puts("[NET] RTL8139 init FAILED\n");
+            }
+        } else {
+            serial_puts("[NET] RTL8139 not found\n");
+        }
+    }
+
     serial_puts("[SCHED] creating background processes\n");
     sched_fs_create_process("init",     init_entry,     10);
     sched_fs_create_process("worker",   worker_entry,    5);
     sched_fs_create_process("idle-demo", idle_demo_entry, 1);
     serial_puts("[SCHED] background processes created, entering VGA shell\n");
     vga_write(4, 0, "Scheduler: 3 procs running ");
-    vga_write(5, 0, "VGA interactive shell active ");
-    vga_set_cursor(7, 0);
+    vga_write(5, 0, "Scheduler: 3 procs running ");
+    vga_write(6, 0, "RTL8139 NIC: active          ");
+    vga_set_cursor(8, 0);
     vga_enable_cursor();
 
     vga_shell_interactive();
