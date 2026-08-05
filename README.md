@@ -1,18 +1,51 @@
 # pasinux — hobby x86 OS kernel
 
-**A from-scratch x86 kernel in C and assembly, currently developed as a hosted userspace simulator for fast iteration before targeting bare metal.**
+**A from-scratch x86 kernel in C and assembly — built two ways: a fast hosted userspace simulator for iterating on kernel logic, and a real freestanding kernel that boots, runs preemptively, and talks to the network in QEMU.**
 
-[![MIT License](LICENSE)](LICENSE)
-![Status](https://img.shields.io/badge/status-early--stage/active-yellow)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Status](https://img.shields.io/badge/status-active--development-yellow)
+![Language](https://img.shields.io/badge/C-96%25-blue)
+![Language](https://img.shields.io/badge/Assembly-2%25-lightgrey)
 
-> **Status:** The C sources (memory manager, scheduler, driver framework, IPC) compile and run today as a normal userspace program on any POSIX-like host. A legacy BIOS boot sector (`boot.asm`) exists but is **not yet wired into a freestanding build** — that's the next major milestone. Everything below describes the working hosted simulator.
+![pasinux booting in QEMU](qemu-boot.png)
+
+> **Status:** pasinux now exists in two working forms. The **hosted simulator** (`kernel_sim`) runs the memory manager, scheduler, driver registry, and IPC layer as an ordinary userspace program on any POSIX-like host — good for fast iteration without touching real hardware state. The **freestanding kernel** (`kernel.pe` → `pasinux.img`) is the real thing: a 32-bit protected-mode x86 kernel with its own boot sector, GDT/IDT/TSS, paging, a PIT-driven preemptive scheduler, PCI + RTL8139 networking, and an interactive VGA shell — and it boots successfully in QEMU today (see screenshot above).
+
+---
+
+## Table of contents
+
+- [Two ways to run pasinux](#two-ways-to-run-pasinux)
+- [Features](#features)
+- [Project structure](#project-structure)
+- [Getting started](#getting-started)
+- [The interactive VGA shell](#the-interactive-vga-shell)
+- [Boot process (freestanding kernel)](#boot-process-freestanding-kernel)
+- [Architecture (hosted simulator)](#architecture-hosted-simulator)
+- [CI](#ci)
+- [Roadmap](#roadmap)
+- [License](#license)
+- [Author](#author)
+
+---
+
+## Two ways to run pasinux
+
+| | Hosted simulator | Freestanding kernel |
+|---|---|---|
+| Binary | `kernel_sim` (+ `kernel_gui.exe`) | `kernel.pe` → `pasinux.img` |
+| Runs on | Any host with `gcc` | QEMU (`qemu-system-i386`) or real x86 hardware via floppy image |
+| Purpose | Fast iteration on core kernel logic | The real kernel: boot sector, protected mode, interrupts, paging, drivers |
+| Toolchain | `gcc`, `make` | + `nasm`, `python3`, a MinGW-style `ld`, `qemu-system-i386` |
+
+Both editions share the same design for memory management, scheduling, and IPC — the hosted version proves the logic out; the freestanding version runs it under real interrupts, real paging, and real hardware I/O.
 
 ---
 
 ## Features
 
-### Memory Management (`mm.c` / `mm.h`)
-A classic freelist-based heap allocator over a static 1 MiB arena — no dependency on the host OS's `malloc`:
+### Memory management (`mm/mm.c` hosted, `mm/mm_fs.c` freestanding)
+A freelist-based heap allocator over a static 1 MiB arena, with no dependency on the host's `malloc`:
 
 | Aspect | Behavior |
 |---|---|
@@ -24,122 +57,145 @@ A classic freelist-based heap allocator over a static 1 MiB arena — no depende
 | API | `kmalloc`, `kcalloc`, `krealloc`, `kfree` |
 | Observability | Current/peak usage, allocation/free/failure counters |
 
-### Process Scheduler (`scheduler.c` / `scheduler.h`)
-A cooperative/preemptive hybrid scheduler built around a circular ready queue:
+### Process scheduling (`sched/scheduler.c` hosted, `sched/sched_fs.c` freestanding)
+- **Hosted:** a circular ready queue with three priority tiers (`LOW`/`NORMAL`/`HIGH`), process states (`READY`/`RUNNING`/`SLEEPING`/`ZOMBIE`), a sleep/wakeup queue, configurable time-slice preemption, and a selectable round-robin or strict-priority policy.
+- **Freestanding:** a genuinely preemptive round-robin scheduler driven by real hardware interrupts — the PIT timer IRQ calls `sched_fs_on_tick()` to count down a process's time slice, and the shared ISR return path calls `sched_fs_maybe_switch()` to swap the saved register frame (and `CR3`, if the process has its own address space). Note: the freestanding scheduler currently ignores the priority argument passed to `sched_fs_create_process()` — every process gets equal round-robin time, unlike the hosted version's priority tiers.
 
-- Three priority tiers: `LOW`, `NORMAL`, `HIGH`
-- Process lifecycle states: `READY → RUNNING → (SLEEPING ⇄ RUNNING) → ZOMBIE`
-- A dedicated sleep/wakeup queue for blocked processes
-- Configurable time-slice length for preemptive round-robin scheduling
-- A second, selectable **strict-priority** policy for scenarios where priority ordering must always win
-- `process_exit()` for controlled process termination
-- Runtime statistics: total context switches, idle vs. active time, and created/terminated process counts
+### CPU / architecture layer (`arch/`, freestanding only)
+The part that doesn't exist in the hosted build — real x86 protected-mode plumbing:
 
-### Driver Framework (`driver.c` / `driver.h`)
-A lightweight driver registry decoupling subsystem code from concrete device implementations:
+- **GDT** (`gdt.c/h`) — 6 entries: kernel code/data, user code/data, and a TSS descriptor, giving ring 0 and ring 3 segments.
+- **TSS** (`tss.c/h`) — used for the `esp0` kernel-stack switch on ring 3 → ring 0 transitions.
+- **IDT** (`idt.c/h`, `isr.asm`) — 256 entries, with 48 ISR stubs wired to real handlers and a dedicated `INT 0x80` syscall gate installed at DPL 3 as a trap gate.
+- **PIC remap + IRQ dispatch** (`interrupt.c/h`) — a handler table so drivers (timer, keyboard, RTL8139) register their own IRQ callbacks.
+- **Paging** (`paging.c/h`) — identity-maps the first 4 MiB and mirrors it at the higher half (`0xC0000000`); the kernel runs at the higher-half virtual address after `entry.asm` enables paging and flushes the identity mapping. `paging_create_pd()` exists for building additional page directories, but per-process address-space isolation isn't wired into process creation yet.
+- **Syscalls** (`syscall.c/h`) — a minimal ABI over `INT 0x80`: `SYS_PRINT`, `SYS_EXIT`, `SYS_GETTIME`.
+- **Ring-3 usermode** (`user/user_start.asm`) — `kmain()` allocates a kernel stack and a user stack, then calls `launch_ring3()` to actually drop into CPL 3 code, round-tripping through the GDT/TSS/syscall path.
 
-- Supports `char`, `block`, `net`, and `input` device classes
-- Drivers implement a common `driver_ops_t` interface
-- A console driver is registered and wired in automatically at boot, providing kernel logging output
+### Driver framework (`drivers/driver.c` hosted, `drivers/driver_fs.c` freestanding)
+A device registry decoupling subsystem code from concrete implementations, supporting `char`, `block`, `net`, and `input` device classes behind a common `driver_ops_t` interface. The freestanding build registers real drivers:
 
-### IPC (`ipc.c` / `ipc.h`)
-A priority-ordered inter-process message queue:
+- **Serial** (`serial.c/h`) — COM1 at 115200 baud, used as the primary boot/debug log.
+- **VGA** (`vga.c/h`) — 80×25 text mode, with cursor control and a read-back self-test at boot.
+- **PS/2 keyboard** (`keyboard.c/h`) — line-buffered input for the interactive shell.
+- **PIT timer** (`timer.c/h`) — 100 Hz tick, the heartbeat for both timekeeping and scheduler preemption.
+- **PCI** (`pci.c/h`) — config-space read/write, BAR decoding, bus-mastering enable, IRQ-line lookup, and a full bus scan at boot.
+- **RTL8139 NIC** (`rtl8139.c/h`) — TX/RX descriptor rings, an IRQ handler, and packet/byte counters; auto-detected via the PCI scan.
 
-- Processes exchange typed messages through the queue
-- Includes a purpose-built **chess protocol** as a realistic test workload — moves, resignations, draw offers, and board-state messages — used to validate correctness and priority ordering across processes end to end
+### Networking (`net/`, freestanding only)
+Brought up automatically at boot if an RTL8139 is found on the PCI bus:
 
-### Boot Sector (`boot/boot.asm`)
-A **placeholder** legacy BIOS boot sector that loads the kernel from floppy, enables the A20 gate, sets up a flat GDT, and enters 32-bit protected mode. **Not yet wired into the build system** — this is the next major integration target.
+- **Ethernet** framing (`net_eth.c/h`)
+- **ARP** (`net_arp.c/h`) with a printable cache
+- **IPv4** (`net_ip.c/h`)
+- **TCP** (`net_tcp.c/h`) — a small client state machine (`CLOSED → SYN_SENT → ESTABLISHED → FIN_WAIT_1 → TIME_WAIT`) with a retransmit timer and blocking connect/send/recv
+- **HTTP/1.1 client** (`http.c/h`) built on top of the TCP stack
+- **JSON serializer** (`json.c/h`) — builds JSON into a fixed buffer; this is a writer, not a parser
+
+### IPC (`ipc/ipc.c` hosted, part of `driver_fs.c` freestanding)
+A priority message queue between processes, exercised end-to-end with a small **chess protocol** — moves, resignations, draw offers/accepts, and board-state messages.
+
+### The interactive VGA shell
+Once the freestanding kernel finishes booting, it drops into a command shell rendered to the VGA text console and driven by the PS/2 keyboard. See [below](#the-interactive-vga-shell) for the command list.
+
+### Win32 GUI control panel (`gui/gui_main.c`, hosted only)
+An optional native Win32 window (`kernel_gui.exe`) wraps the hosted simulator so you can step or run the scheduler, reset state, dump state, spawn processes, and drive the chess-protocol IPC demo (move, draw offer/accept, resign) with buttons instead of only reading console output.
+
+### Boot sector (`boot/boot.asm`)
+A real (no longer placeholder) legacy BIOS boot sector: sets up segments, prints a status message to VGA and serial, loads the kernel image from disk via `INT 0x13`, enables the A20 gate, installs a minimal 3-entry GDT, and switches to 32-bit protected mode before jumping into `entry.asm`.
 
 ### CI (`.github/workflows/`)
-GitHub Actions scaffolding is in place (see [CI note](#ci) below).
+GitHub Actions scaffolding exists but doesn't yet match the real build — see [CI](#ci) below.
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 pasinux/
-├── .github/workflows/        # CI scaffold (requires alignment)
-├── LICENSE                   # MIT License
+├── .github/workflows/         # CI scaffold (needs alignment — see CI section)
+├── LICENSE                    # MIT License
 ├── .gitignore
+├── qemu-boot.png               # Screenshot: freestanding kernel booting in QEMU
 │
 └── pasinux/kernel/
-    ├── Makefile              # Hosted, GUI, sanitizer, and image/QEMU targets
+    ├── Makefile                # Hosted, GUI, sanitizer, and freestanding image/QEMU targets
     │
-    ├── boot/                 # Boot sector + image packaging
-    │   ├── boot.asm          #   Legacy BIOS boot sector
-    │   ├── entry.asm         #   32-bit PM entry point
-    │   ├── linker.ld         #   PE linker script
-    │   └── mkimage.py        #   Flattens kernel into boot image
+    ├── boot/                   # Boot sector + image packaging
+    │   ├── boot.asm            #   16-bit BIOS boot sector -> protected mode
+    │   ├── entry.asm           #   32-bit entry: zero BSS, page tables, higher-half jump
+    │   ├── linker.ld           #   PE linker script (image base 0x10000)
+    │   ├── mkimage.py          #   Flattens kernel.pe + boot.bin into a floppy image
+    │   └── _check_pe.py        #   PE image sanity checker
     │
-    ├── kernel/               # Kernel entry points (hosted + freestanding)
-    │   ├── kernel.c          #   Hosted simulator entry / demo process setup
-    │   ├── kmain.c           #   Freestanding entry (bare-metal)
+    ├── kernel/                 # Kernel entry points
+    │   ├── kernel.c            #   Hosted simulator entry / demo process setup
+    │   ├── kmain.c             #   Freestanding entry — full subsystem bring-up + VGA shell
     │   ├── kernel.h
     │   └── types.h
     │
-    ├── arch/                 # CPU-level infrastructure
-    │   ├── gdt.c/h           #   Global Descriptor Table
-    │   ├── idt.c/h           #   Interrupt Descriptor Table
-    │   ├── interrupt.c/h     #   PIC remap + IRQ dispatch
-    │   ├── paging.c/h        #   Page tables
-    │   ├── tss.c/h           #   Task State Segment
-    │   ├── syscall.c/h       #   Syscall gate (INT 0x80)
-    │   ├── isr.asm           #   ISR stubs (48 vectors)
-    │   └── io.h              #   Port I/O helpers
+    ├── arch/                   # CPU-level infrastructure (freestanding only)
+    │   ├── gdt.c/h              #   Global Descriptor Table (6 entries)
+    │   ├── idt.c/h              #   Interrupt Descriptor Table (256 entries, 48 ISRs)
+    │   ├── interrupt.c/h        #   PIC remap + IRQ dispatch table
+    │   ├── paging.c/h           #   Identity + higher-half paging
+    │   ├── tss.c/h              #   Task State Segment (ring0/ring3 stack switch)
+    │   ├── syscall.c/h          #   INT 0x80 syscall ABI
+    │   ├── isr.asm              #   ISR stubs + scheduler-switch hook
+    │   └── io.h                 #   Port I/O helpers
     │
-    ├── mm/                   # Memory management
-    │   ├── mm.c/h            #   Heap allocator (hosted)
-    │   └── mm_fs.c/h         #   Heap allocator (freestanding)
+    ├── mm/                      # Memory management
+    │   ├── mm.c/h               #   Heap allocator (hosted)
+    │   └── mm_fs.c/h            #   Heap allocator (freestanding)
     │
-    ├── sched/                # Process scheduling
-    │   ├── scheduler.c/h     #   Scheduler (hosted)
-    │   └── sched_fs.c/h      #   Preemptive scheduler (freestanding)
+    ├── sched/                   # Process scheduling
+    │   ├── scheduler.c/h        #   Priority scheduler (hosted)
+    │   └── sched_fs.c/h         #   PIT-driven preemptive scheduler (freestanding)
     │
-    ├── ipc/                  # Inter-process communication
-    │   ├── ipc.c/h           #   Message queue + chess protocol
+    ├── ipc/                     # Inter-process communication
+    │   └── ipc.c/h              #   Message queue + chess protocol (hosted)
     │
-    ├── drivers/              # Device drivers
-    │   ├── driver.c/h        #   Driver registry (hosted)
-    │   ├── driver_fs.c/h     #   Driver registry (freestanding)
-    │   ├── serial.c/h        #   COM1 serial port
-    │   ├── vga.c/h           #   VGA text mode (80×25)
-    │   ├── keyboard.c/h      #   PS/2 keyboard
-    │   ├── timer.c/h         #   PIT timer (100 Hz)
-    │   ├── pci.c/h           #   PCI bus enumeration
-    │   └── rtl8139.c/h       #   RTL8139 network card
+    ├── drivers/                 # Device drivers
+    │   ├── driver.c/h           #   Driver registry (hosted)
+    │   ├── driver_fs.c/h        #   Driver registry + IPC/chess (freestanding)
+    │   ├── serial.c/h           #   COM1 serial port
+    │   ├── vga.c/h              #   VGA text mode (80x25) + shell rendering
+    │   ├── keyboard.c/h         #   PS/2 keyboard
+    │   ├── timer.c/h            #   PIT timer (100 Hz), drives scheduler ticks
+    │   ├── pci.c/h              #   PCI bus enumeration
+    │   └── rtl8139.c/h          #   RTL8139 network card driver
     │
-    ├── net/                  # Networking stack
-    │   ├── net_eth.c/h       #   Ethernet framing
-    │   ├── net_arp.c/h       #   ARP protocol
-    │   ├── net_ip.c/h        #   IPv4
-    │   ├── net_tcp.c/h       #   TCP
-    │   ├── http.c/h          #   HTTP client
-    │   └── json.c/h          #   JSON parser
+    ├── net/                     # Networking stack (freestanding)
+    │   ├── net_eth.c/h          #   Ethernet framing
+    │   ├── net_arp.c/h          #   ARP + cache
+    │   ├── net_ip.c/h           #   IPv4
+    │   ├── net_tcp.c/h          #   TCP client state machine
+    │   ├── http.c/h             #   HTTP/1.1 client
+    │   └── json.c/h             #   JSON serializer
     │
-    ├── gui/                  # Win32 operator GUI
+    ├── gui/                     # Win32 operator GUI (hosted only)
     │   └── gui_main.c/h
     │
-    └── user/                 # User-mode process support
+    └── user/                    # Ring-3 usermode support
         └── user_start.asm
 ```
 
 ---
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
-- **gcc** with C11 support
-- **make**
-- `nasm`, `python3`, `ld` (MinGW), and **QEMU** are required only for the freestanding image target
+- **gcc** with C11 support, **make** — for the hosted simulator, GUI, and sanitizer builds
+- **nasm**, **python3**, a MinGW-style `ld` (`ld -m i386pe`), and **qemu-system-i386** — for the freestanding image + QEMU boot
+- A MinGW/Windows toolchain — for the Win32 GUI build (links `gdi32`, `user32`, `comctl32`, `comdlg32`)
 
-### Build (hosted simulator)
+### Build & run the hosted simulator
 
 ```sh
 cd pasinux/kernel
 make          # builds kernel_sim
+make run      # runs the smoke-test demo
 ```
 
 Or invoke gcc directly:
@@ -151,37 +207,95 @@ gcc -std=c11 -Wall -Wextra -Wpedantic -g \
     kernel/kernel.c mm/mm.c sched/scheduler.c drivers/driver.c ipc/ipc.c
 ```
 
-### Run
+### Build & run the Win32 GUI
 
 ```sh
-make run      # builds and runs the smoke-test demo
+make gui        # builds kernel_gui.exe (requires MinGW / Windows)
+make run-gui
 ```
 
-`make run` initializes memory, the scheduler, drivers, and IPC, spawns three demo processes that exchange chess-protocol messages, drains the IPC queue, and prints final scheduler and memory statistics.
+### Build with sanitizers
+
+```sh
+make sanitize          # builds kernel_sim_san (ASan + UBSan)
+./kernel_sim_san
+```
+
+### Build & boot the real freestanding kernel
+
+```sh
+make image      # kernel.pe -> kernel.bin -> pasinux.img (floppy image)
+make qemu        # boots pasinux.img in QEMU: SDL display + serial on stdio
+```
+
+Other QEMU targets, depending on what you want to see:
+
+| Target | Display | Serial | Notes |
+|---|---|---|---|
+| `make qemu` | SDL | stdio | default |
+| `make qemu-vga` | SDL, forces standard VGA | — | for VGA-specific debugging |
+| `make qemu-sdl` | SDL | — | display only |
+| `make qemu-debug` | SDL | file (`qemu_serial.txt`) | also logs `cpu_reset,int,guest_errors` to `qemu_dbiginf.txt` |
+| `make qemu-headless` | none | stdio | scriptable / CI-friendly |
+| `make qemu-serial` | none | stdio | keeps the QEMU monitor |
 
 ### Other targets
 
 ```sh
-make syntax     # Syntax-check all hosted sources
-make gui        # Build kernel_gui.exe (Win32 console)
-make sanitize   # Build with ASan + UBSan instrumentation
-make clean      # Remove all build artifacts
+make syntax     # syntax-check the hosted sources only
+make clean      # remove all build artifacts (hosted, GUI, sanitizer, freestanding, image)
 ```
 
 ---
 
-## Architecture
+## The interactive VGA shell
 
-`kernel_run_demo()` in `kernel.c` brings subsystems up in a fixed order and exercises them with a small demo workload:
+Once the freestanding kernel finishes its boot sequence, it drops straight into a small command shell rendered on the VGA text console and driven by the PS/2 keyboard:
+
+| Command | What it does |
+|---|---|
+| `help` | List available commands |
+| `ps` | Current process name + context-switch/tick counts |
+| `mm` | Heap stats — allocations, frees, current/peak usage, failures |
+| `uptime` | Uptime in seconds and raw ticks, plus scheduler tick/switch counts |
+| `dump` | `uptime` + `ps` combined |
+| `info` | Kernel version, PIT rate, scheduler type, and the list of registered drivers |
+| `clear` | Clear the VGA screen |
+| `echo <text>` | Echo text back |
+| `sudo <cmd>` | Runs another command with a "root" banner (no real privilege separation yet) |
+| `neofetch` | ASCII banner + a `neofetch`-style system summary |
+| `pci` | Re-run the PCI bus scan |
+| `netstat` | RTL8139 status — I/O base, packet count, byte count |
+| `arp` | Print the ARP cache (output goes to the serial console) |
+
+---
+
+## Boot process (freestanding kernel)
+
+1. **BIOS boot sector** (`boot/boot.asm`, 16-bit, 512 bytes, loaded at `0x7C00`) — sets up segments, prints a boot message to VGA and serial, loads 100 sectors of the kernel image from disk via `INT 0x13`, enables the A20 line, installs a minimal 3-entry GDT, and switches to 32-bit protected mode.
+2. It jumps to **`entry.asm`**'s `_start`, loaded at physical `0x10000` by the flattened image `boot/mkimage.py` builds.
+3. `entry.asm` zeroes `.bss` (while still using physical addresses), builds a page directory/table identity-mapping the first 4 MiB and mirroring it at the higher half (`0xC0000000`), enables paging, and jumps to the higher-half virtual address of `kmain`. It then clears the now-unneeded identity mapping and flushes the TLB.
+4. **`kmain()`** (`kernel/kmain.c`) brings subsystems up in order: serial console → VGA text mode (with a read-back self-test) → confirms higher-half paging is active → heap → GDT (6 entries) → TSS → IDT (256 entries, 48 ISR stubs, `INT 0x80` syscall gate) → IRQ handler table → scheduler → driver registry → PCI bus scan.
+5. A **ring-3 demo** allocates a kernel stack and a user stack, then calls `launch_ring3()` to actually execute `user_start.asm` at CPL 3 — exercising the GDT/TSS/syscall path end to end.
+6. A **PIT heartbeat check** busy-waits for a few intervals and confirms `timer_ticks()` is actually advancing, i.e. that the PIT + IRQ0 path is alive.
+7. If an **RTL8139** is found on the PCI bus, it's initialized and the Ethernet/ARP/TCP stack comes up on top of it.
+8. Three demo background processes (`init`, `worker`, `idle-demo`) are created on the freestanding scheduler.
+9. Control passes to the **interactive VGA shell**.
+
+---
+
+## Architecture (hosted simulator)
+
+`kernel_run_demo()` in `kernel/kernel.c` brings subsystems up in a fixed order and exercises them with a small demo workload:
 
 1. **Heap** is initialized over a static 1 MiB arena.
 2. **Scheduler** is initialized with an empty ready queue.
 3. **Drivers** are registered — currently a console driver.
 4. **IPC** is initialized.
-5. **Three demo processes** are created to exercise the subsystems:
+5. **Three demo processes** are created:
    - `init` (high priority) — sends a chess starting position and a move over IPC.
    - `worker` (normal priority) — replies with a move.
-   - `idle-demo` (low priority) — demonstrates the scheduler falling back to idle when there is no work.
+   - `idle-demo` (low priority) — shows the scheduler falling back to idle when there's no work.
 6. `scheduler_run(8)` advances the scheduler for 8 ticks: ticking the sleep queue, preempting the running process once its time slice is spent, and selecting the next process (round-robin by default, or strict priority under the alternate policy).
 7. IPC messages queued during the run are drained.
 8. Final scheduler and memory statistics are printed before shutdown.
@@ -209,18 +323,26 @@ make clean      # Remove all build artifacts
 
 ## CI
 
-The `.github/workflows/` directory contains a **placeholder** GitHub Actions workflow that currently expects an Autotools-style pipeline (`./configure`, `make check`, `make distcheck`). The project uses a plain `Makefile`, so the workflow will not pass as committed. Aligning the CI configuration with the actual build system is an open item (see [Roadmap](#roadmap)).
+The `.github/workflows/` directory contains a placeholder GitHub Actions workflow that currently runs an Autotools-style pipeline (`./configure`, `make check`, `make distcheck`). The project uses a plain `Makefile` with no `configure` script and no `check`/`distcheck` targets, so the workflow won't pass CI as committed — either add Autotools scaffolding or simplify the workflow to the real targets (`make`, `make run`, `make syntax`, `make image`, `make qemu-headless`). Tracked in the [Roadmap](#roadmap).
 
 ---
 
 ## Roadmap
 
-- [x] **Heap allocator** — first-fit, splitting, coalescing, live stats
-- [x] **Process scheduler** — circular ready queue, priorities, sleep/wakeup, runtime stats
-- [ ] **VGA text-mode driver** — 80×25 console output
-- [ ] **Interrupt handlers** — IDT, PIC remap, PIT timer
-- [ ] **Wire boot.asm into a freestanding build** — boot sector loads and boots the kernel in QEMU
-- [ ] **Align CI with actual Makefile** — replace Autotools scaffold with `make` / `make run` / `make syntax`
+- [x] Heap allocator — first-fit, splitting, coalescing, live stats (hosted + freestanding)
+- [x] Process scheduler — priority tiers, sleep/wakeup, runtime stats (hosted); real PIT-driven preemption (freestanding)
+- [x] VGA text-mode driver + interactive shell
+- [x] Interrupt handling — GDT, TSS, IDT (256 entries / 48 ISRs), PIC remap, PIT @ 100 Hz, PS/2 keyboard on IRQ1
+- [x] Boot sector wired into a real freestanding build — boots and runs in QEMU
+- [x] Ring-3 usermode transition + a minimal syscall ABI (`SYS_PRINT` / `SYS_EXIT` / `SYS_GETTIME`)
+- [x] PCI enumeration + RTL8139 NIC driver
+- [x] Network stack — Ethernet / ARP / IPv4 / TCP client + HTTP/1.1 client + JSON serializer
+- [x] Win32 GUI control panel for the hosted simulator
+- [ ] Per-process address-space isolation (`paging_create_pd()` exists but isn't wired into process creation — ring-3 code currently shares the kernel's page tables)
+- [ ] Priority actually respected by the freestanding scheduler (currently round-robin only; the priority argument is accepted and ignored)
+- [ ] A real disk-backed filesystem (the `_fs` suffix on some modules means "freestanding," not "filesystem" — there isn't one yet)
+- [ ] Align the CI workflow with the actual Makefile targets
+- [ ] Testing on real hardware, beyond QEMU
 
 ---
 
