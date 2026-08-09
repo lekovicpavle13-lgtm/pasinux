@@ -7,14 +7,15 @@
 ![Language](https://img.shields.io/badge/C-96%25-blue)
 ![Language](https://img.shields.io/badge/Assembly-2%25-lightgrey)
 
-![pasinux booting in QEMU](qemu-boot.png)
+![pasinux VGA shell running in QEMU](asssets/new_qemu_boot.png)
 
-> **Status:** pasinux now exists in two working forms. The **hosted simulator** (`kernel_sim`) runs the memory manager, scheduler, driver registry, and IPC layer as an ordinary userspace program on any POSIX-like host — good for fast iteration without touching real hardware state. The **freestanding kernel** (`kernel.pe` → `pasinux.img`) is the real thing: a 32-bit protected-mode x86 kernel with its own boot sector, GDT/IDT/TSS, paging, a PIT-driven preemptive scheduler, PCI + RTL8139 networking, and an interactive VGA shell — and it boots successfully in QEMU today (see screenshot above).
+> **Status:** pasinux now exists in two working forms. The **hosted simulator** (`kernel_sim`) runs the memory manager, scheduler, driver registry, and IPC layer as an ordinary userspace program on any POSIX-like host — good for fast iteration without touching real hardware state. The **freestanding kernel** (`kernel.pe` → `pasinux.img`) is the real thing: a 32-bit protected-mode x86 kernel with its own boot sector, GDT/IDT/TSS, paging, a PIT-driven preemptive scheduler, PCI + RTL8139 networking, and an interactive VGA shell — and it boots successfully in QEMU today, complete with PCI enumeration, ring-3 usermode, and a live NIC (see screenshot above).
 
 ---
 
 ## Table of contents
 
+- [Then vs. now](#then-vs-now)
 - [Two ways to run pasinux](#two-ways-to-run-pasinux)
 - [Features](#features)
 - [Project structure](#project-structure)
@@ -26,6 +27,17 @@
 - [Roadmap](#roadmap)
 - [License](#license)
 - [Author](#author)
+
+---
+
+## Then vs. now
+
+pasinux started as a boot sector that could barely prove it was alive, and has grown into a kernel with a real driver stack, networking, and an interactive shell.
+
+| Early boot — protected mode + preemption confirmed | Today — VGA shell, PCI, ring-3, and a live NIC |
+|:---:|:---:|
+| ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) |
+| `boot -> PM -> IDT/PIT -> preemptive OK` | `pasinux VGA shell ready` — PCI devices enumerated, ring-3 test passed, scheduler running 3 procs, RTL8139 NIC active |
 
 ---
 
@@ -116,7 +128,9 @@ pasinux/
 ├── .github/workflows/         # CI scaffold (needs alignment — see CI section)
 ├── LICENSE                    # MIT License
 ├── .gitignore
-├── qemu-boot.png               # Screenshot: freestanding kernel booting in QEMU
+├── asssets/                    # Screenshots used in this README
+│   ├── old_qemu-boot.png       #   Early boot: PM/IDT/PIT/preemptive check
+│   └── new_qemu_boot.png       #   Current: full VGA shell, PCI, ring-3, NIC
 │
 └── pasinux/kernel/
     ├── Makefile                # Hosted, GUI, sanitizer, and freestanding image/QEMU targets
