@@ -4,8 +4,8 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-active--development-yellow)
-![Language](https://img.shields.io/badge/C-96%25-blue)
-![Language](https://img.shields.io/badge/Assembly-2%25-lightgrey)
+![Language](https://img.shields.io/badge/C-25-blue)
+![Language](https://img.shields.io/badge/Assembly-25-lightgrey)
 
 ![pasinux VGA shell running in QEMU](asssets/new_qemu_boot.png)
 
