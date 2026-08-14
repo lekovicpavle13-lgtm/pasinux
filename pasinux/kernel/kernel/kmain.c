@@ -1,4 +1,6 @@
+#include "ata.h"
 #include "driver_fs.h"
+#include "fat12.h"
 #include "gdt.h"
 #include "idt.h"
 #include "interrupt.h"
@@ -25,6 +27,9 @@ extern char user_start[];
 static volatile uint32_t g_init_iters;
 static volatile uint32_t g_worker_iters;
 static volatile uint32_t g_idle_iters;
+
+/* Mounted FAT12 volume (set in freestanding_subsystems_up). */
+static fat12_fs_t* g_fs;
 
 static void init_entry(void) {
     serial_puts("[PROC] init: started\n");
@@ -86,6 +91,51 @@ static void freestanding_subsystems_up(void) {
     serial_puts("[IPC] ipc ready\n");
 
     pci_scan_all();
+
+    // Bring up the ATA block driver and mount the FAT12 volume that this
+    // floppy image carries.
+    if (ata_init() == 0) {
+        serial_puts("[FS] ATA driver up; mounting FAT12...\n");
+        g_fs = fat12_mount("ata");
+        if (g_fs) {
+            serial_puts("[FS] FAT12 mounted OK\n");
+            // Boot-time self-test of the exact find+read path the shell's
+            // `cat` uses. KERNEL.BIN spans 83 clusters, so this exercises
+            // FAT-chain walking end to end.
+            file_info_t kbin;
+            if (fat12_find_file(g_fs, "KERNEL.BIN", &kbin) == 0) {
+                uint32_t sz = 0u;
+                void* data = fat12_read_file(g_fs, &kbin, &sz);
+                serial_puts("[FS] selftest: KERNEL.BIN found, first_cluster=");
+                /* simple hex dump of the 16-bit first_cluster (no libc) */
+                {
+                    unsigned int cv = kbin.first_cluster;
+                    char hx[16]; int hi = 0;
+                    static const char digs[] = "0123456789ABCDEF";
+                    do { hx[hi++] = digs[cv & 0xFu]; cv >>= 4; } while (cv && hi < 15);
+                    while (hi > 0) serial_putc(hx[--hi]);
+                }
+                if (data) {
+                    serial_puts(" read ");
+                    // cheap decimal print
+                    char n[16]; int nd = 0; uint32_t v = sz;
+                    if (v == 0u) n[nd++] = '0';
+                    while (v > 0u && nd < 15) { n[nd++] = (char)('0' + (v % 10u)); v /= 10u; }
+                    while (nd > 0) serial_putc(n[--nd]);
+                    serial_puts(" bytes: OK\n");
+                    kfree(data);
+                } else {
+                    serial_puts(" read FAILED\n");
+                }
+            } else {
+                serial_puts("[FS] selftest: KERNEL.BIN not found\n");
+            }
+        } else {
+            serial_puts("[FS] FAT12 mount FAILED\n");
+        }
+    } else {
+        serial_puts("[FS] ATA init failed; filesystem unavailable\n");
+    }
 }
 
 static void ring3_demo(void){
@@ -162,7 +212,93 @@ static void vga_shell_help(void) {
     vga_puts("  pci         list PCI devices\n");
     vga_puts("  netstat     show NIC status\n");
     vga_puts("  arp         show ARP cache\n");
+    vga_puts("  ls          list FAT12 root directory\n");
+    vga_puts("  cat <file>  print a file from FAT12 volume\n");
     }
+
+/* Print one byte of a file as a hex pair (used by the fs shell commands). */
+static void vga_puts_hex(uint8_t b) {
+    static const char digits[] = "0123456789abcdef";
+    char pair[3];
+    pair[0] = digits[(b >> 4) & 0x0Fu];
+    pair[1] = digits[b & 0x0Fu];
+    pair[2] = '\0';
+    vga_puts(pair);
+}
+
+/* ls: list the root directory of the mounted FAT12 volume. */
+static void vga_shell_ls(void) {
+    if (!g_fs) {
+        vga_puts("filesystem not mounted\n");
+        return;
+    }
+    const uint32_t entries = g_fs->root_entry_count;
+    for (uint32_t i = 0u; i < entries; ++i) {
+        const uint8_t* e = g_fs->root_dir + i * 32u;
+        if (e[0] == 0x00) break;             /* end of directory */
+        if (e[0] == 0xE5) continue;          /* deleted entry */
+        if (e[11] == 0x0F) continue;         /* long-file-name marker */
+        /* Print the 8.3 name with the pad spaces dropped. */
+        for (int k = 0; k < 8; ++k) {
+            char c = (char)e[k];
+            if (c == ' ') break;
+            vga_putc(c);
+        }
+        if (e[8] != ' ') {
+            vga_putc('.');
+            for (int k = 8; k < 11; ++k) {
+                char c = (char)e[k];
+                if (c == ' ') break;
+                vga_putc(c);
+            }
+        }
+        uint32_t size = (uint32_t)e[28] | ((uint32_t)e[29] << 8) |
+                        ((uint32_t)e[30] << 16) | ((uint32_t)e[31] << 24);
+        vga_puts("  (");
+        uint32_t s = size;
+        char num[16];
+        int ndig = 0;
+        if (s == 0u) num[ndig++] = '0';
+        while (s > 0u && ndig < 15) { num[ndig++] = (char)('0' + (s % 10u)); s /= 10u; }
+        while (ndig > 0) { vga_putc(num[--ndig]); }
+        vga_puts(" bytes)\n");
+    }
+}
+
+/* cat <file>: read and print a file from the mounted FAT12 volume. */
+static void vga_shell_cat(const char* name) {
+    if (!g_fs) {
+        vga_puts("filesystem not mounted\n");
+        return;
+    }
+    file_info_t info;
+    if (fat12_find_file(g_fs, name, &info) != 0) {
+        vga_puts("cat: file not found: ");
+        vga_puts(name);
+        vga_puts("\n");
+        return;
+    }
+    uint32_t size = 0u;
+    void* data = fat12_read_file(g_fs, &info, &size);
+    if (!data) {
+        vga_puts("cat: read failed\n");
+        return;
+    }
+    /* Print file content, escaping non-printable bytes as hex. */
+    for (uint32_t i = 0u; i < size; ++i) {
+        uint8_t b = ((const uint8_t*)data)[i];
+        if (b == '\n' || b == '\r') {
+            vga_puts("\n");
+        } else if (b >= 0x20 && b <= 0x7E) {
+            vga_putc((char)b);
+        } else {
+            vga_puts("\\x");
+            vga_puts_hex(b);
+        }
+    }
+    vga_puts("\n");
+    kfree(data);
+}
 
 static void vga_shell_ps(void) {
     char buf[32];
@@ -334,6 +470,16 @@ static void vga_shell_run(const char *line) {
         vga_shell_netstat();
     } else if (cmd[0] == 'a' && cmd[1] == 'r' && cmd[2] == 'p' && cmd[3] == '\0') {
         vga_shell_arp();
+    } else if (cmd[0] == 'l' && cmd[1] == 's' && cmd[2] == '\0') {
+        vga_shell_ls();
+    } else if (cmd[0] == 'c' && cmd[1] == 'a' && cmd[2] == 't') {
+        const char* fname = line + 3;
+        while (*fname == ' ') fname++;
+        if (*fname) {
+            vga_shell_cat(fname);
+        } else {
+            vga_puts("usage: cat <file>\n");
+        }
     } else {
         vga_puts("unknown: ");
         vga_puts(line);

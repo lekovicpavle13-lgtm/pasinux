@@ -32,13 +32,14 @@ KERNEL_SECTORS := 100
 FREE_CFLAGS := -DFREESTANDING -m32 -std=c11 -ffreestanding -fno-pic -fno-pie \
                -fno-stack-protector -fno-asynchronous-unwind-tables \
                -Wall -Wextra -Wpedantic -Werror
-FREE_CFLAGS += -Iboot -Iarch -Imm -Isched -Idrivers -Inet -Iipc -Ikernel -Iuser -Igui
+FREE_CFLAGS += -Iboot -Iarch -Imm -Isched -Idrivers -Inet -Iipc -Ikernel -Iuser -Igui -Ifs
 FREE_OBJS := boot/entry.o arch/isr.o kernel/kmain.o drivers/vga.o arch/idt.o \
              arch/interrupt.o drivers/timer.o sched/sched_fs.o drivers/serial.o \
              drivers/keyboard.o mm/mm_fs.o drivers/driver_fs.o arch/paging.o \
              arch/tss.o arch/gdt.o arch/syscall.o user/user_start.o drivers/pci.o \
              drivers/rtl8139.o net/net_eth.o net/net_arp.o net/net_ip.o \
-             net/net_tcp.o net/http.o net/json.o
+             net/net_tcp.o net/http.o net/json.o \
+             drivers/ata.o fs/fat12.o
 IMAGE := pasinux.img
 
 .PHONY: all clean run syntax gui run-gui sanitize image boot qemu qemu-sdl qemu-debug qemu-headless qemu-serial
@@ -113,28 +114,28 @@ $(IMAGE): kernel.bin
 image boot: $(IMAGE)
 
 qemu: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display sdl -serial stdio -no-reboot -no-shutdown
 
 qemu-vga: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display sdl -vga std -no-reboot -no-shutdown
 
 qemu-sdl: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display sdl -no-reboot -no-shutdown
 
 qemu-debug: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display sdl -serial file:qemu_serial.txt -no-reboot -no-shutdown \
 		-d cpu_reset,int,guest_errors 2>qemu_dbiginf.txt
 
 qemu-headless: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display none -serial stdio -monitor none -no-reboot
 
 qemu-serial: $(IMAGE)
-	$(QEMU) -drive file=$(IMAGE),format=raw,if=floppy -boot order=a \
+	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
 		-display none -serial stdio -monitor none
 
 clean:
