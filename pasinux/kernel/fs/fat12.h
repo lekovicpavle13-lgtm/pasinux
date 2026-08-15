@@ -49,8 +49,12 @@ int fat12_write_file(fat12_fs_t* fs, const char* name, const void* data, uint32_
 // Create a new empty file in the root directory. Returns 0 on success.
 int fat12_create_file(fat12_fs_t* fs, const char* name);
 
-// Delete a file from the root directory. Returns 0 on success.
+// Delete a file/dir from the root directory. Returns 0 on success.
 int fat12_delete_file(fat12_fs_t* fs, const char* name);
+
+// Create a new subdirectory in the root directory (real FAT12 dir with ./../).
+// Returns 0 on success, -1 on failure. Files-under-folders is out of scope.
+int fat12_create_dir(fat12_fs_t* fs, const char* name);
 
 // Unmount and free resources.
 void fat12_unmount(fat12_fs_t* fs);

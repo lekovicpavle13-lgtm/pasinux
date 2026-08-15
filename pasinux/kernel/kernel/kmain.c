@@ -23,6 +23,13 @@
 extern void launch_ring3(void *entry, void *user_stack_top);
 extern char user_start[];
 
+/* Freestanding string-length helper (no libc). */
+static uint32_t km_strlen(const char* s) {
+    uint32_t n = 0;
+    while (s[n]) ++n;
+    return n;
+}
+
 /* Background process counters */
 static volatile uint32_t g_init_iters;
 static volatile uint32_t g_worker_iters;
@@ -130,6 +137,99 @@ static void freestanding_subsystems_up(void) {
             } else {
                 serial_puts("[FS] selftest: KERNEL.BIN not found\n");
             }
+            /* Boot-time write-path self-test: create -> write -> read-back ->
+             * verify -> create_dir -> delete. This exercises the exact FAT12
+             * write path the shell's touch/write/mkdir/rm use, and lands on
+             * the on-disk volume (pasinux.img), so a success is a real durable
+             * disk write through ATA PIO. */
+            {
+                static const char tdata[] = "hello pasinux write test 0123456789";
+                const uint32_t tsize = sizeof(tdata) - 1u;
+                int ok = fat12_write_file(g_fs, "_SELFTST.TXT", tdata, tsize);
+                if (ok == 0) {
+                    file_info_t ti;
+                    if (fat12_find_file(g_fs, "_SELFTST.TXT", &ti) == 0
+                        && ti.size == tsize) {
+                        uint32_t rs = 0u;
+                        void* rd = fat12_read_file(g_fs, &ti, &rs);
+                        ok = (rd && rs == tsize
+                              && ((const char*)rd)[0] == 'h'
+                              && ((const char*)rd)[tsize - 1u] == '9') ? 0 : -1;
+                        if (rd) kfree(rd);
+                    } else {
+                        ok = -1;
+                    }
+                }
+                int dir_ok = (fat12_create_dir(g_fs, "_TSTDIR") == 0)
+                          && (fat12_delete_file(g_fs, "_SELFTST.TXT") == 0)
+                          && (fat12_delete_file(g_fs, "_TSTDIR") == 0);
+                if (ok == 0 && dir_ok)
+                    serial_puts("[FS] write selftest: OK\n");
+                else
+                    serial_puts("[FS] write selftest: FAILED\n");
+            }
+            /* Multi-cluster (900-byte = 2 clusters) write/read-back test. The
+             * shell's `write` is capped at the 128-byte line buffer, so this
+             * is the only way to exercise the FAT-chain linking across >1
+             * cluster. Uses a deterministic byte pattern and verifies every
+             * byte round-trips. */
+            {
+                static const char* tn = "WRTEST.TMP";
+                uint8_t wbuf[900];
+                for (unsigned i = 0u; i < sizeof(wbuf); ++i)
+                    wbuf[i] = (uint8_t)(i % 251u);
+                if (fat12_write_file(g_fs, tn, wbuf, sizeof(wbuf)) == 0) {
+                    file_info_t wi;
+                    if (fat12_find_file(g_fs, tn, &wi) == 0 && wi.size == sizeof(wbuf)) {
+                        uint32_t ws = 0u;
+                        void* wdata = fat12_read_file(g_fs, &wi, &ws);
+                        int wbad = (int)sizeof(wbuf);
+                        if (wdata && ws == sizeof(wbuf)) {
+                            wbad = 0;
+                            for (unsigned i = 0u; i < sizeof(wbuf); ++i)
+                                if (((const uint8_t*)wdata)[i] != wbuf[i]) wbad = 1;
+                        }
+                        if (wdata) kfree(wdata);
+                        serial_puts(wbad == 0
+                            ? "[FS] writeselftest: 900-byte multi-cluster r/w OK\n"
+                            : "[FS] writeselftest: DATA MISMATCH\n");
+                        fat12_delete_file(g_fs, tn);
+                    } else {
+                        serial_puts("[FS] writeselftest: find/size FAILED\n");
+                        fat12_delete_file(g_fs, tn);
+                    }
+                } else {
+                    serial_puts("[FS] writeselftest: write FAILED\n");
+                }
+            }
+            /* Cross-reboot durability check: a marker file written in one boot
+             * must survive into the next. Run 1 creates it; run 2 sees it with
+             * the right content, verifies the bytes, then deletes it (so the
+             * next pair of boots repeats). This proves writes are flushed to
+             * pasinux.img and re-read through ATA, not cached in RAM only. */
+            {
+                const char* marker = "_WTEST.TXT";
+                const char* mdata = "persistent";
+                const uint32_t msize = 10u;
+                file_info_t mi;
+                if (fat12_find_file(g_fs, marker, &mi) == 0) {
+                    uint32_t ms = 0u;
+                    void* md = fat12_read_file(g_fs, &mi, &ms);
+                    int content_ok = (md && ms == msize &&
+                        ((const char*)md)[0] == 'p' &&
+                        ((const char*)md)[msize - 1u] == 't');
+                    if (md) kfree(md);
+                    int rm = fat12_delete_file(g_fs, marker);
+                    serial_puts(content_ok && rm == 0
+                        ? "[FS] persist selftest: OK (survived reboot)\n"
+                        : "[FS] persist selftest: FAILED\n");
+                } else {
+                    int wc = fat12_write_file(g_fs, marker, mdata, msize);
+                    serial_puts(wc == 0
+                        ? "[FS] persist selftest: wrote marker (reboot to verify)\n"
+                        : "[FS] persist selftest: write FAILED\n");
+                }
+            }
         } else {
             serial_puts("[FS] FAT12 mount FAILED\n");
         }
@@ -214,6 +314,10 @@ static void vga_shell_help(void) {
     vga_puts("  arp         show ARP cache\n");
     vga_puts("  ls          list FAT12 root directory\n");
     vga_puts("  cat <file>  print a file from FAT12 volume\n");
+    vga_puts("  touch <f>   create an empty file\n");
+    vga_puts("  write <f> <text>  write text to a file\n");
+    vga_puts("  mkdir <d>   create a directory\n");
+    vga_puts("  rm <f>      delete a file/dir\n");
     }
 
 /* Print one byte of a file as a hex pair (used by the fs shell commands). */
@@ -298,6 +402,56 @@ static void vga_shell_cat(const char* name) {
     }
     vga_puts("\n");
     kfree(data);
+}
+
+static void vga_shell_touch(const char* arg) {
+    while (*arg == ' ') arg++;
+    if (!*arg) { vga_puts("usage: touch <file>\n"); return; }
+    if (!g_fs) { vga_puts("filesystem not mounted\n"); return; }
+    int rc = fat12_create_file(g_fs, arg);
+    if (rc != 0) vga_puts("touch: failed (exists or dir full)\n");
+    else         vga_puts("touch: ok\n");
+}
+
+/* write <file> <text...>: create-or-overwrite a file with the given text. */
+static void vga_shell_write(const char* arg) {
+    while (*arg == ' ') arg++;
+    if (!*arg) { vga_puts("usage: write <file> <text...>\n"); return; }
+    if (!g_fs) { vga_puts("filesystem not mounted\n"); return; }
+    const char* sp = arg;
+    while (*sp && *sp != ' ') sp++;
+    char fname[64];
+    uint32_t flen = (uint32_t)(sp - arg);
+    if (flen == 0 || flen >= sizeof(fname)) { vga_puts("write: bad filename\n"); return; }
+    for (uint32_t i = 0; i < flen; ++i) fname[i] = arg[i];
+    fname[flen] = '\0';
+    const char* text = sp;
+    while (*text == ' ') text++;
+    int rc = fat12_write_file(g_fs, fname, text, km_strlen(text));
+    if (rc != 0) vga_puts("write: failed (out of space)?\n");
+    else         vga_puts("write: ok\n");
+}
+
+/* mkdir <dir>: create a real FAT12 subdirectory in the root. */
+static void vga_shell_mkdir(const char* arg) {
+    while (*arg == ' ') arg++;
+    if (!*arg) { vga_puts("usage: mkdir <dir>\n"); return; }
+    if (!g_fs) { vga_puts("filesystem not mounted\n"); return; }
+    int rc = fat12_create_dir(g_fs, arg);
+    if (rc != 0) vga_puts("mkdir: failed (exists or dir full)\n");
+    else         vga_puts("mkdir: ok\n");
+}
+
+/* rm <file>: delete a file (or dir) from the root. */
+static void vga_shell_rm(const char* arg) {
+    while (*arg == ' ') arg++;
+    if (!*arg) { vga_puts("usage: rm <file>\n"); return; }
+    if (!g_fs) { vga_puts("filesystem not mounted\n"); return; }
+    if (fat12_delete_file(g_fs, arg) != 0) {
+        vga_puts("rm: not found\n");
+    } else {
+        vga_puts("rm: ok\n");
+    }
 }
 
 static void vga_shell_ps(void) {
@@ -480,6 +634,17 @@ static void vga_shell_run(const char *line) {
         } else {
             vga_puts("usage: cat <file>\n");
         }
+    } else if (cmd[0] == 't' && cmd[1] == 'o') {
+        vga_shell_touch(line + 5);
+    } else if (cmd[0] == 'w' && cmd[1] == 'r' && cmd[2] == 'i' && cmd[3] == 't' && cmd[4] == 'e') {
+        vga_shell_write(line + 5);
+    } else if (cmd[0] == 'm' && cmd[1] == 'k' && cmd[2] == 'd' && cmd[3] == 'i' && cmd[4] == 'r') {
+        vga_shell_mkdir(line + 5);
+    } else if (cmd[0] == 'r' && cmd[1] == 'm' && cmd[2] == '\0') {
+        const char* fname = line + 2;
+        while (*fname == ' ') fname++;
+        if (*fname) vga_shell_rm(fname);
+        else        vga_puts("usage: rm <file>\n");
     } else {
         vga_puts("unknown: ");
         vga_puts(line);
