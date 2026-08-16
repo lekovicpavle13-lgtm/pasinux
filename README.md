@@ -1,6 +1,6 @@
 # pasinux — hobby x86 OS kernel
 
-**A from-scratch x86 kernel in C and assembly — built two ways: a fast hosted userspace simulator for iterating on kernel logic, and a real freestanding kernel that boots, runs preemptively, and talks to the network in QEMU.**
+**A from-scratch x86 kernel in C and assembly — built two ways: a fast hosted userspace simulator for iterating on kernel logic, and a real freestanding kernel that boots, runs preemptively, talks to the network, and now persists files to a real disk — in QEMU and in Oracle VirtualBox.**
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Status](https://img.shields.io/badge/status-active--development-yellow)
@@ -9,7 +9,7 @@
 
 ![pasinux VGA shell running in QEMU](asssets/new_qemu_boot.png)
 
-> **Status:** pasinux now exists in two working forms. The **hosted simulator** (`kernel_sim`) runs the memory manager, scheduler, driver registry, and IPC layer as an ordinary userspace program on any POSIX-like host — good for fast iteration without touching real hardware state. The **freestanding kernel** (`kernel.pe` → `pasinux.img`) is the real thing: a 32-bit protected-mode x86 kernel with its own boot sector, GDT/IDT/TSS, paging, a PIT-driven preemptive scheduler, PCI + RTL8139 networking, and an interactive VGA shell — and it boots successfully in QEMU today, complete with PCI enumeration, ring-3 usermode, and a live NIC (see screenshot above).
+> **Status:** pasinux now exists in two working forms. The **hosted simulator** (`kernel_sim`) runs the memory manager, scheduler, driver registry, and IPC layer as an ordinary userspace program on any POSIX-like host — good for fast iteration without touching real hardware state. The **freestanding kernel** (`kernel.pe` → `pasinux.img`) is the real thing: a 32-bit protected-mode x86 kernel with its own boot sector, GDT/IDT/TSS, paging, a PIT-driven preemptive scheduler, PCI + RTL8139 networking, an ATA-backed FAT12 filesystem, and an interactive VGA shell. It boots in QEMU, and — converted to a VDI — now boots and runs the same shell in Oracle VirtualBox on a real virtual hard disk (see screenshot below).
 
 ---
 
@@ -22,6 +22,7 @@
 - [Getting started](#getting-started)
 - [The interactive VGA shell](#the-interactive-vga-shell)
 - [Boot process (freestanding kernel)](#boot-process-freestanding-kernel)
+- [Running on Oracle VirtualBox](#running-on-oracle-virtualbox)
 - [Architecture (hosted simulator)](#architecture-hosted-simulator)
 - [CI](#ci)
 - [Roadmap](#roadmap)
@@ -32,12 +33,12 @@
 
 ## Then vs. now
 
-pasinux started as a boot sector that could barely prove it was alive, and has grown into a kernel with a real driver stack, networking, and an interactive shell.
+pasinux started as a boot sector that could barely prove it was alive, and has grown into a kernel with a real driver stack, networking, a persistent filesystem, and an interactive shell that now boots on more than just QEMU.
 
-| Early boot — protected mode + preemption confirmed | Today — VGA shell, PCI, ring-3, and a live NIC |
-|:---:|:---:|
-| ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) |
-| `boot -> PM -> IDT/PIT -> preemptive OK` | `pasinux VGA shell ready` — PCI devices enumerated, ring-3 test passed, scheduler running 3 procs, RTL8139 NIC active |
+| Early boot — protected mode + preemption confirmed | Today — VGA shell, PCI, ring-3, and a live NIC | Now — booting from a real disk in VirtualBox |
+|:---:|:---:|:---:|
+| ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) | ![pasinux booting in Oracle VirtualBox from a converted VDI disk](asssets/oracle_vm_boot.png) |
+| `boot -> PM -> IDT/PIT -> preemptive OK` | `pasinux VGA shell ready` — PCI devices enumerated, ring-3 test passed, scheduler running 3 procs, RTL8139 NIC active | Same shell, same command set — running as `pasinux [Running]` on a VirtualBox VM with "Boot Order: Hard Disk" |
 
 ---
 
@@ -46,11 +47,11 @@ pasinux started as a boot sector that could barely prove it was alive, and has g
 | | Hosted simulator | Freestanding kernel |
 |---|---|---|
 | Binary | `kernel_sim` (+ `kernel_gui.exe`) | `kernel.pe` → `pasinux.img` |
-| Runs on | Any host with `gcc` | QEMU (`qemu-system-i386`) or real x86 hardware via floppy image |
-| Purpose | Fast iteration on core kernel logic | The real kernel: boot sector, protected mode, interrupts, paging, drivers |
-| Toolchain | `gcc`, `make` | + `nasm`, `python3`, a MinGW-style `ld`, `qemu-system-i386` |
+| Runs on | Any host with `gcc` | QEMU (`qemu-system-i386`), real x86 hardware, or a hypervisor (Oracle VirtualBox, tested) via a converted disk image |
+| Purpose | Fast iteration on core kernel logic | The real kernel: boot sector, protected mode, interrupts, paging, drivers, filesystem |
+| Toolchain | `gcc`, `make` | + `nasm`, `python3`, a MinGW-style `ld`, `qemu-system-i386` (or `VBoxManage` for VirtualBox) |
 
-Both editions share the same design for memory management, scheduling, and IPC — the hosted version proves the logic out; the freestanding version runs it under real interrupts, real paging, and real hardware I/O.
+Both editions share the same design for memory management, scheduling, and IPC — the hosted version proves the logic out; the freestanding version runs it under real interrupts, real paging, real hardware I/O, and now a real disk.
 
 ---
 
@@ -93,6 +94,17 @@ A device registry decoupling subsystem code from concrete implementations, suppo
 - **PIT timer** (`timer.c/h`) — 100 Hz tick, the heartbeat for both timekeeping and scheduler preemption.
 - **PCI** (`pci.c/h`) — config-space read/write, BAR decoding, bus-mastering enable, IRQ-line lookup, and a full bus scan at boot.
 - **RTL8139 NIC** (`rtl8139.c/h`) — TX/RX descriptor rings, an IRQ handler, and packet/byte counters; auto-detected via the PCI scan.
+- **ATA (PIO)** (`ata.c/h`) — minimal driver for the primary master IDE drive, backing the FAT12 filesystem below with `ata_read_sectors` / `ata_write_sectors`.
+
+### Filesystem (`fs/fat12.c`, freestanding only) — new
+A real FAT12 driver sitting on top of the ATA block driver, registered as a `block` device named `"ata"`:
+
+- **Mount** — `fat12_mount()` reads the boot sector/BPB off the ATA drive and loads the FAT table and root directory into memory.
+- **Read** — `fat12_find_file()` + `fat12_read_file()` walk the FAT chain across multiple clusters and return a `kmalloc`'d buffer.
+- **Write** — `fat12_write_file()` creates or overwrites a file, including multi-cluster files (exercised at boot by a self-test that writes, reads back, and verifies a buffer spanning several clusters).
+- **Directory ops** — `fat12_create_file()`, `fat12_create_dir()` (a real FAT12 subdirectory with `.`/`..` entries — no nested files under it yet), and `fat12_delete_file()`.
+- **Boot-time self-tests** — `kmain()` mounts the volume, reads back `KERNEL.BIN` end-to-end (FAT-chain walking across 83 clusters), and runs create → write → read → verify → delete round-trips, including a persistence marker file meant to survive a reboot and be re-read from disk rather than just RAM.
+- **Shell integration** — `ls`, `cat`, `touch`, `write`, `mkdir`, and `rm` all operate on the mounted volume (see [shell commands](#the-interactive-vga-shell) below).
 
 ### Networking (`net/`, freestanding only)
 Brought up automatically at boot if an RTL8139 is found on the PCI bus:
@@ -130,11 +142,18 @@ pasinux/
 ├── .gitignore
 ├── asssets/                    # Screenshots used in this README
 │   ├── old_qemu-boot.png       #   Early boot: PM/IDT/PIT/preemptive check
-│   └── new_qemu_boot.png       #   Current: full VGA shell, PCI, ring-3, NIC
+│   ├── new_qemu_boot.png       #   QEMU: full VGA shell, PCI, ring-3, NIC
+│   └── oracle_vm_boot.png      #   Same shell, booted in Oracle VirtualBox
 │
-└── pasinux/kernel/
-    ├── Makefile                # Hosted, GUI, sanitizer, and freestanding image/QEMU targets
-    │
+├── drivers/                    # NOTE: stray top-level copy of ata.c/h — see note below
+│   ├── ata.c
+│   └── ata.h
+│
+├── tests/
+│   └── drivers/
+│       └── test_ata.c          # Standalone test for the ATA driver
+│
+└── Kernel/
     ├── boot/                   # Boot sector + image packaging
     │   ├── boot.asm            #   16-bit BIOS boot sector -> protected mode
     │   ├── entry.asm           #   32-bit entry: zero BSS, page tables, higher-half jump
@@ -153,39 +172,43 @@ pasinux/
     │   ├── idt.c/h              #   Interrupt Descriptor Table (256 entries, 48 ISRs)
     │   ├── interrupt.c/h        #   PIC remap + IRQ dispatch table
     │   ├── paging.c/h           #   Identity + higher-half paging
-    │   ├── tss.c/h              #   Task State Segment (ring0/ring3 stack switch)
-    │   ├── syscall.c/h          #   INT 0x80 syscall ABI
-    │   ├── isr.asm              #   ISR stubs + scheduler-switch hook
-    │   └── io.h                 #   Port I/O helpers
+    │   ├── tss.c/h               #   Task State Segment (ring0/ring3 stack switch)
+    │   ├── syscall.c/h           #   INT 0x80 syscall ABI
+    │   ├── isr.asm               #   ISR stubs + scheduler-switch hook
+    │   └── io.h                  #   Port I/O helpers
     │
     ├── mm/                      # Memory management
     │   ├── mm.c/h               #   Heap allocator (hosted)
-    │   └── mm_fs.c/h            #   Heap allocator (freestanding)
+    │   └── mm_fs.c/h             #   Heap allocator (freestanding)
     │
     ├── sched/                   # Process scheduling
     │   ├── scheduler.c/h        #   Priority scheduler (hosted)
-    │   └── sched_fs.c/h         #   PIT-driven preemptive scheduler (freestanding)
+    │   └── sched_fs.c/h          #   PIT-driven preemptive scheduler (freestanding)
     │
     ├── ipc/                     # Inter-process communication
-    │   └── ipc.c/h              #   Message queue + chess protocol (hosted)
+    │   └── ipc.c/h               #   Message queue + chess protocol (hosted)
     │
-    ├── drivers/                 # Device drivers
-    │   ├── driver.c/h           #   Driver registry (hosted)
-    │   ├── driver_fs.c/h        #   Driver registry + IPC/chess (freestanding)
-    │   ├── serial.c/h           #   COM1 serial port
-    │   ├── vga.c/h              #   VGA text mode (80x25) + shell rendering
-    │   ├── keyboard.c/h         #   PS/2 keyboard
-    │   ├── timer.c/h            #   PIT timer (100 Hz), drives scheduler ticks
-    │   ├── pci.c/h              #   PCI bus enumeration
-    │   └── rtl8139.c/h          #   RTL8139 network card driver
+    ├── drivers/                 # Device drivers (freestanding)
+    │   ├── driver.c/h            #   Driver registry (hosted)
+    │   ├── driver_fs.c/h         #   Driver registry + IPC/chess (freestanding)
+    │   ├── serial.c/h            #   COM1 serial port
+    │   ├── vga.c/h                #   VGA text mode (80x25) + shell rendering
+    │   ├── keyboard.c/h          #   PS/2 keyboard
+    │   ├── timer.c/h              #   PIT timer (100 Hz), drives scheduler ticks
+    │   ├── pci.c/h                #   PCI bus enumeration
+    │   ├── rtl8139.c/h            #   RTL8139 network card driver
+    │   └── ata.c/h                #   ATA PIO driver — backs the FAT12 filesystem
+    │
+    ├── fs/                      # Filesystem — new
+    │   └── fat12.c/h              #   FAT12 driver: mount, read, write, mkdir, rm
     │
     ├── net/                     # Networking stack (freestanding)
-    │   ├── net_eth.c/h          #   Ethernet framing
-    │   ├── net_arp.c/h          #   ARP + cache
-    │   ├── net_ip.c/h           #   IPv4
-    │   ├── net_tcp.c/h          #   TCP client state machine
-    │   ├── http.c/h             #   HTTP/1.1 client
-    │   └── json.c/h             #   JSON serializer
+    │   ├── net_eth.c/h            #   Ethernet framing
+    │   ├── net_arp.c/h            #   ARP + cache
+    │   ├── net_ip.c/h             #   IPv4
+    │   ├── net_tcp.c/h            #   TCP client state machine
+    │   ├── http.c/h                #   HTTP/1.1 client
+    │   └── json.c/h                #   JSON serializer
     │
     ├── gui/                     # Win32 operator GUI (hosted only)
     │   └── gui_main.c/h
@@ -193,6 +216,8 @@ pasinux/
     └── user/                    # Ring-3 usermode support
         └── user_start.asm
 ```
+
+> **Note on structure:** the tree above reflects the repo as it stands after moving the kernel from `pasinux/kernel/` to `Kernel/`. There's a stray top-level `drivers/ata.c` + `ata.h` duplicating `Kernel/drivers/ata.*` — worth deleting or reconciling so there's a single source of truth for the ATA driver. There's also currently no `Makefile` checked in (it seems to have been dropped in the restructuring) — see [Getting started](#getting-started) and [Roadmap](#roadmap).
 
 ---
 
@@ -203,11 +228,14 @@ pasinux/
 - **gcc** with C11 support, **make** — for the hosted simulator, GUI, and sanitizer builds
 - **nasm**, **python3**, a MinGW-style `ld` (`ld -m i386pe`), and **qemu-system-i386** — for the freestanding image + QEMU boot
 - A MinGW/Windows toolchain — for the Win32 GUI build (links `gdi32`, `user32`, `comctl32`, `comdlg32`)
+- **Oracle VirtualBox** (+ `VBoxManage`, bundled with it) — if you want to boot the freestanding kernel as a VM instead of under QEMU
+
+> ⚠️ **The `Makefile` referenced below isn't currently checked into the repo** (it's missing after the move to `Kernel/`). Until it's restored, treat the commands as the intended targets rather than something you can run today — see the [Roadmap](#roadmap).
 
 ### Build & run the hosted simulator
 
 ```sh
-cd pasinux/kernel
+cd Kernel
 make          # builds kernel_sim
 make run      # runs the smoke-test demo
 ```
@@ -238,7 +266,7 @@ make sanitize          # builds kernel_sim_san (ASan + UBSan)
 ### Build & boot the real freestanding kernel
 
 ```sh
-make image      # kernel.pe -> kernel.bin -> pasinux.img (floppy image)
+make image      # kernel.pe -> kernel.bin -> pasinux.img (disk image, now FAT12-formatted)
 make qemu        # boots pasinux.img in QEMU: SDL display + serial on stdio
 ```
 
@@ -252,6 +280,8 @@ Other QEMU targets, depending on what you want to see:
 | `make qemu-debug` | SDL | file (`qemu_serial.txt`) | also logs `cpu_reset,int,guest_errors` to `qemu_dbiginf.txt` |
 | `make qemu-headless` | none | stdio | scriptable / CI-friendly |
 | `make qemu-serial` | none | stdio | keeps the QEMU monitor |
+
+For booting under Oracle VirtualBox instead, see [Running on Oracle VirtualBox](#running-on-oracle-virtualbox) below.
 
 ### Other targets
 
@@ -281,20 +311,56 @@ Once the freestanding kernel finishes its boot sequence, it drops straight into 
 | `pci` | Re-run the PCI bus scan |
 | `netstat` | RTL8139 status — I/O base, packet count, byte count |
 | `arp` | Print the ARP cache (output goes to the serial console) |
+| `ls` | List the FAT12 root directory (name, size in bytes) |
+| `cat <file>` | Print a file from the mounted FAT12 volume (non-printables shown as `\xHH`) |
+| `touch <file>` | Create an empty file |
+| `write <file> <text>` | Create or overwrite a file with the given text |
+| `mkdir <dir>` | Create a real FAT12 subdirectory (`.`/`..` entries, no nested files yet) |
+| `rm <file>` | Delete a file or directory from the root |
 
 ---
 
 ## Boot process (freestanding kernel)
 
-1. **BIOS boot sector** (`boot/boot.asm`, 16-bit, 512 bytes, loaded at `0x7C00`) — sets up segments, prints a boot message to VGA and serial, loads 100 sectors of the kernel image from disk via `INT 0x13`, enables the A20 line, installs a minimal 3-entry GDT, and switches to 32-bit protected mode.
+1. **BIOS boot sector** (`boot/boot.asm`, 16-bit, 512 bytes, loaded at `0x7C00`) — sets up segments, prints a boot message to VGA and serial, loads the kernel image from disk via `INT 0x13`, enables the A20 line, installs a minimal 3-entry GDT, and switches to 32-bit protected mode.
 2. It jumps to **`entry.asm`**'s `_start`, loaded at physical `0x10000` by the flattened image `boot/mkimage.py` builds.
 3. `entry.asm` zeroes `.bss` (while still using physical addresses), builds a page directory/table identity-mapping the first 4 MiB and mirroring it at the higher half (`0xC0000000`), enables paging, and jumps to the higher-half virtual address of `kmain`. It then clears the now-unneeded identity mapping and flushes the TLB.
 4. **`kmain()`** (`kernel/kmain.c`) brings subsystems up in order: serial console → VGA text mode (with a read-back self-test) → confirms higher-half paging is active → heap → GDT (6 entries) → TSS → IDT (256 entries, 48 ISR stubs, `INT 0x80` syscall gate) → IRQ handler table → scheduler → driver registry → PCI bus scan.
-5. A **ring-3 demo** allocates a kernel stack and a user stack, then calls `launch_ring3()` to actually execute `user_start.asm` at CPL 3 — exercising the GDT/TSS/syscall path end to end.
-6. A **PIT heartbeat check** busy-waits for a few intervals and confirms `timer_ticks()` is actually advancing, i.e. that the PIT + IRQ0 path is alive.
-7. If an **RTL8139** is found on the PCI bus, it's initialized and the Ethernet/ARP/TCP stack comes up on top of it.
-8. Three demo background processes (`init`, `worker`, `idle-demo`) are created on the freestanding scheduler.
-9. Control passes to the **interactive VGA shell**.
+5. **ATA + FAT12 bring-up** — `ata_init()` brings up the primary IDE master, then `fat12_mount("ata")` mounts the FAT12 volume carried on the disk image. A boot-time self-test reads `KERNEL.BIN` end-to-end (exercising FAT-chain walking across its 83 clusters), then runs a create → write → read-back → verify → `mkdir` → delete round-trip, plus a persistence-marker file meant to be re-read from disk on a later boot rather than just cached in RAM.
+6. A **ring-3 demo** allocates a kernel stack and a user stack, then calls `launch_ring3()` to actually execute `user_start.asm` at CPL 3 — exercising the GDT/TSS/syscall path end to end.
+7. A **PIT heartbeat check** busy-waits for a few intervals and confirms `timer_ticks()` is actually advancing, i.e. that the PIT + IRQ0 path is alive.
+8. If an **RTL8139** is found on the PCI bus, it's initialized and the Ethernet/ARP/TCP stack comes up on top of it.
+9. Three demo background processes (`init`, `worker`, `idle-demo`) are created on the freestanding scheduler.
+10. Control passes to the **interactive VGA shell**, now with `ls`/`cat`/`touch`/`write`/`mkdir`/`rm` wired to the mounted FAT12 volume.
+
+---
+
+## Running on Oracle VirtualBox
+
+pasinux isn't limited to QEMU anymore — the same freestanding kernel image now boots and runs its full VGA shell inside Oracle VirtualBox, on a real (virtual) hard disk rather than a floppy.
+
+![pasinux booting in Oracle VirtualBox from a converted VDI disk](asssets/oracle_vm_boot.png)
+
+What's happening in the screenshot: the `pasinux` VM (Base Memory 64 MB, Boot Order: Hard Disk, `Other/Unknown` guest OS type) is `Running`, and its console window shows the exact same VGA shell as the QEMU build — `help` lists the full command set, including the FAT12 filesystem commands.
+
+**How it got there:** `pasinux.img` (the flattened boot-sector + kernel image `mkimage.py` produces) was converted into a VirtualBox-native disk (VDI/VMDK) and attached to the VM as its boot hard disk, instead of running it directly under QEMU as a floppy image. Roughly:
+
+```sh
+# Convert the flat pasinux.img into a VirtualBox disk format
+VBoxManage convertfromraw pasinux.img pasinux.vdi --format VDI
+
+# Create the VM and attach the disk (adjust names/paths as needed)
+VBoxManage createvm --name pasinux --ostype Other --register
+VBoxManage storagectl pasinux --name "IDE" --add ide
+VBoxManage storageattach pasinux --storagectl "IDE" --port 0 --device 0 \
+    --type hdd --medium pasinux.vdi
+VBoxManage modifyvm pasinux --boot1 disk --memory 64
+VBoxManage startvm pasinux
+```
+
+This is a meaningful step beyond QEMU: it's the first time pasinux has booted through a *different* BIOS/virtualization stack, and — since the disk is FAT12-formatted and carries `KERNEL.BIN` — it's also the first real exercise of the ATA driver and FAT12 filesystem outside of the QEMU IDE emulation they were originally built against.
+
+> Not yet tried: booting the VDI on real hardware, or confirming the persistence-marker self-test in `kmain()` actually survives a VM reboot (power off, then `VBoxManage startvm pasinux` again) rather than just a fresh boot from a freshly-built image.
 
 ---
 
@@ -337,7 +403,7 @@ Once the freestanding kernel finishes its boot sequence, it drops straight into 
 
 ## CI
 
-The `.github/workflows/` directory contains a placeholder GitHub Actions workflow that currently runs an Autotools-style pipeline (`./configure`, `make check`, `make distcheck`). The project uses a plain `Makefile` with no `configure` script and no `check`/`distcheck` targets, so the workflow won't pass CI as committed — either add Autotools scaffolding or simplify the workflow to the real targets (`make`, `make run`, `make syntax`, `make image`, `make qemu-headless`). Tracked in the [Roadmap](#roadmap).
+The `.github/workflows/` directory contains a placeholder GitHub Actions workflow that currently runs an Autotools-style pipeline (`./configure`, `make check`, `make distcheck`). The project uses a plain `Makefile` with no `configure` script and no `check`/`distcheck` targets — and right now no `Makefile` at all is checked in after the move to `Kernel/` — so the workflow won't pass CI as committed. Either add Autotools scaffolding or simplify the workflow to the real targets (`make`, `make run`, `make syntax`, `make image`, `make qemu-headless`), and restore the `Makefile`. Tracked in the [Roadmap](#roadmap).
 
 ---
 
@@ -352,11 +418,15 @@ The `.github/workflows/` directory contains a placeholder GitHub Actions workflo
 - [x] PCI enumeration + RTL8139 NIC driver
 - [x] Network stack — Ethernet / ARP / IPv4 / TCP client + HTTP/1.1 client + JSON serializer
 - [x] Win32 GUI control panel for the hosted simulator
+- [x] ATA PIO driver + a real disk-backed FAT12 filesystem — mount, read, write, mkdir, rm, with shell commands and boot-time self-tests
+- [x] Booted outside QEMU — running in Oracle VirtualBox from a converted VDI disk
+- [ ] Restore the missing `Makefile` (lost in the move from `pasinux/kernel/` to `Kernel/`) and reconcile the duplicate top-level `drivers/ata.*`
 - [ ] Per-process address-space isolation (`paging_create_pd()` exists but isn't wired into process creation — ring-3 code currently shares the kernel's page tables)
 - [ ] Priority actually respected by the freestanding scheduler (currently round-robin only; the priority argument is accepted and ignored)
-- [ ] A real disk-backed filesystem (the `_fs` suffix on some modules means "freestanding," not "filesystem" — there isn't one yet)
+- [ ] Confirm the FAT12 persistence-marker self-test actually survives a real reboot (VM power-cycle or QEMU restart on the same image), not just a fresh image build
+- [ ] Nested directories in FAT12 (currently `mkdir` creates a real subdirectory, but files-under-folders is out of scope)
 - [ ] Align the CI workflow with the actual Makefile targets
-- [ ] Testing on real hardware, beyond QEMU
+- [ ] Testing on real hardware, beyond QEMU and VirtualBox
 
 ---
 
