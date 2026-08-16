@@ -29,6 +29,12 @@ by the PS/2 mouse (new driver) and by keyboard equivalents, without leaving text
 
 ## 3. Module inventory
 
+**Canonical build tree.** All work targets `pasinux/kernel/` (the tree `make image` /
+`make qemu` actually build; its Makefile is tracked in git). There is a nested,
+near-duplicate **mirror at `pasinux/kernel/Kernel/` (capital K)** where files are
+missing/duplicated — the implementation plan and every edit MUST target the canonical
+`pasinux/kernel/` tree and never the `Kernel/` mirror.
+
 ```
 tui/tui_core.c/h    cell/color types, tui_surface, compositor, cursor overlay
 tui/tui_wm.c/h      window_t, z-order, focus, lifecycle ops, event loop (tui_run)
@@ -36,8 +42,9 @@ tui/widgets.c/h     tui_readline widget (built on surfaces)
 drivers/ps2mouse.c/h  PS/2 mouse driver (IRQ12)
 drivers/rtc.c/h     CMOS RTC wall-clock reader
 drivers/vga.c/h     ADD per-cell-attribute functions (existing text API unchanged)
+arch/idt.c/h        ADD pic_unmask_irq() and call it from ps2mouse_init() (see §4.5)
 kernel/kmain.c      replace vga_shell_interactive() with WM init + tui_run(); channel shell output to window
-Makefile            add new .o files + -Itui
+Makefile            add new .o files + -Itui (in canonical pasinux/kernel/Makefile)
 ```
 
 ## 4. Section detail
@@ -77,11 +84,30 @@ Today `vga.c` writes every cell with hardcoded `0x0F`. The TUI needs per-cell co
 - **Keyboard extension:** add to `keyboard.c` an event queue `{ascii, scancode, alt, ctrl,
   shift}` from the existing scancode handler, with `keyboard_set_mode()` so the plain
   readline path still works.
+- **Queue overflow policy (explicit):** keyboard and mouse events can be produced while
+  `tui_run()` is mid-composite and unable to drain. Both queues are fixed-size rings with
+  **drop-newest on full** and a shared `wm_queue_overflow` counter, surfaced in the `dump`
+  command so drive-by loss is observable, not silent.
 
 ### 4.3 Mouse + cursor (ps2mouse)
 
+**Hard prerequisite — the mouse IRQ is currently unreachable.** `arch/idt.c`'s
+`pic_remap()` ends with `outb(0x21,0xFC)` (which masks IRQ2, the slave-cascade line)
+and `outb(0xA1,0xFF)` (which masks every slave line, including IRQ12). Even a correct
+driver therefore can never receive an interrupt. As part of this work, add
+`pic_unmask_irq(int irq)` to `arch/idt.c` and call `pic_unmask_irq(2)` (cascade) plus
+`pic_unmask_irq(12)` from `ps2mouse_init()` — do **not** hardcode per-device masks inside
+`pic_remap()`. This is an explicit, named implementation step (see §4.5), not folded into
+the driver.
+
 - PS/2 auxiliary device on IRQ12 (port 0x60 data; 0x64 command byte to enable IRQ12 +
   write 0xD4). Three-button, no wheel: packet = 3 bytes → signed ΔX, ΔY + 3 button bits.
+- **Byte-alignment resync (mandatory, from day one).** A raw-stream ISR can start
+  mid-packet (spurious IRQ / dropped byte), after which every packet is read 1–2 bytes
+  off and the cursor teleports garbage. Each assembled first byte must pass the
+  well-known marker tests — **bit 3 of the first byte is always 1; bits 6–7 of byte 1 are
+  always 0**. On any mismatch, discard bytes until a valid first byte is found (re-align),
+  and increment a `mouse_resync` counter. Never trust the stream without validation.
 - Init: enable auxiliary device, stream mode, sample rate. Accumulate deltas into a
   shared `mouse_state_t` (instantaneous position for dragging). `mouse_enable/disable`.
 - Delta→cell scaling (±N deltas ≈ one cell nudge) so movement is usable across 80×25.
@@ -112,17 +138,47 @@ Today `vga.c` writes every cell with hardcoded `0x0F`. The TUI needs per-cell co
 - **Build:** add `drivers/ps2mouse.o`, `drivers/rtc.o`, `tui/tui_core.o`,
   `tui/tui_wm.o`, `tui/widgets.o` to `FREE_OBJS`; add `-Itui` to `FREE_CFLAGS`.
 
-## 5. Testing
+## 5. Integration, PIC connectivity, and IRQ-hold note
 
-- **Boot-time selftest (headless via serial, regression-safe):** after WM init, script the
-  compositor directly — create a synthetic window, composite, assert the VGA framebuffer at
-  known coordinates holds the expected border glyph; move the window and assert cells
-  relocated and the old region repainted. Log `[TUI] compositor selftest: OK`.
+- **PIC connectivity (explicit step, do first):** add `pic_unmask_irq(int)` to `arch/idt.c`
+  and call `pic_unmask_irq(2)` + `pic_unmask_irq(12)` from `ps2mouse_init()`. Without this
+  the mouse never fires even with a correct driver.
+- **Composite IRQ hold is bounded.** `cli()/sti()` around a full ~2 KB composite is a few
+  microseconds; at even dozens of mouse samples/sec the duty cycle is negligible, so
+  keyboard IRQ1 (masked during that window) does not cause perceptible typing stutter.
+  Keep the composite tight and drop to `hlt` between frames.
+
+## 6. Implementation staging
+
+This is intentionally a large feature; land it in two independently-testable milestones so
+a failure is attributable, not attributed to "the whole PR":
+
+- **Milestone 1 — compositor + WM + keyboard navigation + shell window.** Surfaces,
+  compositor, `tui_win_*`, `tui_readline`, the shell window, and keyboard-only navigation
+  (Alt+Tab, Alt+arrows, Ctrl+D, F2/F3/Esc). Fully demo-able headless via the compositor
+  selftest and interactive via keyboard. Mouse/RTC are not needed to prove the WM.
+- **Milestone 2 — mouse + RTC.** `pic_unmask_irq()`, the PS/2 mouse driver with packet
+  resync, the block cursor, hit-test/drag, and the RTC Clock window. This is the pass where
+  the IRQ2/IRQ12 masking and byte-alignment resync land and get exercised.
+
+## 7. Testing
+
+- **Boot-time compositor selftest (headless via serial, regression-safe):** after WM init,
+  script the compositor directly — create a synthetic window, composite, assert the VGA
+  framebuffer at known coordinates holds the expected border glyph; move the window and
+  assert cells relocated and the old region repainted. Log `[TUI] compositor selftest: OK`.
+- **Mouse driver watchdog (Milestone 2).** Maintain a `mouse_rx` (packets parsed) and
+  `mouse_bad` (resync events) counter and log them over serial on a timer; the boot log
+  first reports them. This validates the real PS/2 packet path itself (the code where bugs
+  live), not just the compositor. Assert in the boot log line that `mouse_rx > 0` (a literal
+  mouse may not be attached in a VM, so this is advisory: report the counters, and treat
+  `mouse_rx == 0` + `mouse_bad == 0` as "no device / not streaming", not a failure).
+- **Queue overflow visibility.** `dump` reports `wm_queue_overflow`.
 - **Interactive (VirtualBox VBoxVGA or QEMU):** drag Clock/About by title bar (continuous,
   clamped); Alt+Tab cycle focus; Alt+arrows nudge; Esc closes About, F2 reopens; Clock
   ticks every second; run `ls`/`touch`/`write` in the window to confirm FS works inside it.
 
-## 6. Out of scope
+## 8. Out of scope
 
 - Graphics (bitmap) mode, fonts beyond the VGA 8×16 set, real image windows.
 - Wheel scrolling, per-window resize handles, drag-and-drop between windows.
