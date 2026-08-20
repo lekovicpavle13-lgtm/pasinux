@@ -58,6 +58,8 @@ all: $(KERNEL)
 # ================= Build =================
  $(KERNEL): $(OBJS) boot/linker.ld
     $(CC) -m32 -nostdlib -Wl,-T,boot/linker.ld -Wl,-e,_start -o $@ $(OBJS) -lgcc
+$(KERNEL_BIN): $(KERNEL)
+  objcopy -O binary $(KERNEL) $@
 
 %.o: %.c
     $(CC) $(CFLAGS) -c $< -o $@
