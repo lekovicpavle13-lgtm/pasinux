@@ -37,7 +37,7 @@ pasinux started as a boot sector that could barely prove it was alive, and has g
 
 | Early boot — protected mode + preemption confirmed | Today — VGA shell, PCI, ring-3, and a live NIC | Now — booting from a real disk in VirtualBox |
 |:---:|:---:|:---:|
-| ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) | ![pasinux booting in Oracle VirtualBox from a converted VDI disk](asssets/oracle_vm_boot.png) |
+| ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) | ![pasinux booting in Oracle VirtualBox from a converted VDI disk](asssets/oracle_vm_boot_.png) |
 | `boot -> PM -> IDT/PIT -> preemptive OK` | `pasinux VGA shell ready` — PCI devices enumerated, ring-3 test passed, scheduler running 3 procs, RTL8139 NIC active | Same shell, same command set — running as `pasinux [Running]` on a VirtualBox VM with "Boot Order: Hard Disk" |
 
 ---
