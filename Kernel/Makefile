@@ -5,6 +5,12 @@ LDFLAGS ?=
 TARGET := kernel_sim
 OBJS := kernel/kernel.o mm/mm.o sched/scheduler.o drivers/driver.o ipc/ipc.o
 
+nasm -f elf32 boot/entry.asm -o boot/entry.o
+nasm -f elf32 arch/isr.asm -o arch/isr.o
+nasm -f elf32 user/user_start.asm -o user/user_start.o
+
+ld -m elf_i386 -T boot/linker.ld -e _start -o kernel.elf $(OBJS)
+
 GUI_TARGET := kernel_gui
 GUI_OBJS := kernel/kernel_gui.o mm/mm.o sched/scheduler.o drivers/driver.o ipc/ipc.o gui/gui_main.o
 GUI_CFLAGS := -mwindows $(CFLAGS) -DPASINUX_GUI_BUILD
