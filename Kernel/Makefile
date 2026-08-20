@@ -22,7 +22,7 @@ ASFLAGS = -f elf32 -g -F dwarf
 C_SRCS = kernel/kmain.c arch/idt.c arch/interrupt.c arch/paging.c arch/tss.c \
          arch/gdt.c arch/syscall.c mm/mm_fs.c sched/sched_fs.c drivers/vga.c \
          drivers/timer.c drivers/serial.c drivers/keyboard.c drivers/driver_fs.c \
-         drivers/pci.c drivers/rtl8139.c drivers/ata.c net/net_eth.c net_arp.c \
+         drivers/pci.c drivers/rtl8139.c drivers/ata.c net/net_eth.c  \
          net/net_arp.c net/net_ip.c net/net_tcp.c net/http.c net/json.c fs/fat12.c
 
 ASM_SRCS = boot/entry.asm arch/isr.asm user/user_start.asm
@@ -31,7 +31,10 @@ OBJS   = $(C_SRCS:.c=.o) $(ASM_SRCS:.asm=.o)
 KERNEL = kernel.elf
 IMAGE  = pasinux.img
 
-.PHONY: all image run clean
+.PHONY: all image run clean syntax
+
+# compile everything, don't link — fast syntax check
+syntax: $(OBJS)
 
 all: $(KERNEL)
  
