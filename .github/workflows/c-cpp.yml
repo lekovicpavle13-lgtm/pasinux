@@ -43,10 +43,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install nasm + qemu
+      - name: Install nasm + qemu + 32-bit toolchain headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm qemu-system-x86
+          sudo apt-get install -y nasm qemu-system-x86 gcc-multilib
 
       - name: Tool versions
         run: |
