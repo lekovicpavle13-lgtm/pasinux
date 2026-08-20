@@ -64,7 +64,14 @@ jobs:
 
       - name: Show serial log
         if: always()
-        run: cat Kernel/boot.log
+        run: |
+          if [ -f Kernel/boot.log ]; then
+            cat Kernel/boot.log
+          else
+            echo "No boot.log — 'make image' (or an earlier step) failed before boot could even run."
+            echo "Check the 'make image' step above for the actual compiler/linker/python error."
+            exit 1
+          fi
 
       - name: Assert boot reached FAT12 + timer + no panics
         run: |
@@ -89,12 +96,15 @@ jobs:
 
       - name: Upload boot log
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: boot-log
           path: Kernel/boot.log
 
       - name: Upload disk image
+        if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: pasinux-img
