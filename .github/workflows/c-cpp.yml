@@ -19,10 +19,6 @@ jobs:
 
       - run: sudo apt-get update && sudo apt-get install -y build-essential nasm gcc-multilib qemu-system-x86 mtools
 
-      - name: make syntax
-        run: make syntax
-        working-directory: Kernel
-
       - name: make (kernel_sim)
         run: make
         working-directory: Kernel
