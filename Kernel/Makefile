@@ -28,21 +28,24 @@ QEMU ?= $(or $(shell command -v qemu-system-i386 2>/dev/null), \
            "C:/Program Files/qemu/qemu-system-i386.exe", \
            /c/Program\ Files/qemu/qemu-system-i386.exe, \
            qemu-system-i386)
+QEMU_NET ?= -nic user,model=rtl8139
 KERNEL_SECTORS := 100
 FREE_CFLAGS := -DFREESTANDING -m32 -std=c11 -ffreestanding -fno-pic -fno-pie \
                -fno-stack-protector -fno-asynchronous-unwind-tables \
                -Wall -Wextra -Wpedantic -Werror
-FREE_CFLAGS += -Iboot -Iarch -Imm -Isched -Idrivers -Inet -Iipc -Ikernel -Iuser -Igui -Ifs
+FREE_CFLAGS += -Iboot -Iarch -Imm -Isched -Idrivers -Inet -Iipc -Ikernel -Iuser -Igui -Ifs -Itui
 FREE_OBJS := boot/entry.o arch/isr.o kernel/kmain.o drivers/vga.o arch/idt.o \
              arch/interrupt.o drivers/timer.o sched/sched_fs.o drivers/serial.o \
              drivers/keyboard.o mm/mm_fs.o drivers/driver_fs.o arch/paging.o \
              arch/tss.o arch/gdt.o arch/syscall.o user/user_start.o drivers/pci.o \
              drivers/rtl8139.o net/net_eth.o net/net_arp.o net/net_ip.o \
              net/net_tcp.o net/http.o net/json.o \
-             drivers/ata.o fs/fat12.o
+             drivers/ata.o fs/fat12.o \
+             drivers/ps2mouse.o drivers/rtc.o \
+             tui/tui_core.o tui/tui_wm.o tui/widgets.o tui/shell.o
 IMAGE := pasinux.img
 
-.PHONY: all clean run syntax gui run-gui sanitize image boot qemu qemu-sdl qemu-gtk qemu-debug qemu-headless qemu-serial
+.PHONY: all clean run syntax gui run-gui sanitize image boot qemu qemu-sdl qemu-debug qemu-headless qemu-serial
 
 all: $(TARGET)
 
@@ -71,10 +74,10 @@ $(GUI_TARGET): $(GUI_OBJS)
 	$(CC) $(GUI_LDFLAGS) -o $@ $(GUI_OBJS) $(GUI_LIBS)
 
 kernel/kernel_gui.o: kernel/kernel.c
-	$(CC) $(GUI_CFLAGS) -c $< -o $@
+	$(CC) $(GUI_CFLAGS) -c kernel/kernel.c -o $@
 
 gui/gui_main.o: gui/gui_main.c
-	$(CC) $(GUI_CFLAGS) -c $< -o $@
+	$(CC) $(GUI_CFLAGS) -c gui/gui_main.c -o $@
 
 $(SAN_DIR):
 	mkdir -p $(SAN_DIR)/kernel $(SAN_DIR)/mm $(SAN_DIR)/sched $(SAN_DIR)/drivers $(SAN_DIR)/ipc
@@ -113,38 +116,30 @@ $(IMAGE): kernel.bin
 
 image boot: $(IMAGE)
 
-# NOTE: `-display sdl,gl=off` forces SDL to software-render frames. On Windows
-# hosts the default GL/D3D presenter can open a blank/black window even though
-# the guest renders fine; gl=off avoids that. Use `qemu-gtk` as an alternative
-# backend if SDL still shows a black window.
 qemu: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display sdl,gl=off -vga std -serial stdio -no-reboot -no-shutdown
+		$(QEMU_NET) -display sdl -serial stdio -no-reboot -no-shutdown
 
 qemu-vga: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display sdl,gl=off -vga std -no-reboot -no-shutdown
+		$(QEMU_NET) -display sdl -vga std -no-reboot -no-shutdown
 
 qemu-sdl: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display sdl,gl=off -vga std -no-reboot -no-shutdown
+		$(QEMU_NET) -display sdl -no-reboot -no-shutdown
 
 qemu-debug: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display sdl,gl=off -vga std -serial file:qemu_serial.txt -no-reboot -no-shutdown \
+		$(QEMU_NET) -display sdl -serial file:qemu_serial.txt -no-reboot -no-shutdown \
 		-d cpu_reset,int,guest_errors 2>qemu_dbiginf.txt
-
-qemu-gtk: $(IMAGE)
-	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display gtk -vga std -serial stdio -no-reboot -no-shutdown
 
 qemu-headless: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display none -serial stdio -monitor none -no-reboot
+		$(QEMU_NET) -display none -serial stdio -monitor none -no-reboot
 
 qemu-serial: $(IMAGE)
 	$(QEMU) -machine pc -drive file=$(IMAGE),format=raw,if=ide -boot order=c \
-		-display none -serial stdio -monitor none
+		$(QEMU_NET) -display none -serial stdio -monitor none
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TARGET).exe $(GUI_OBJS) $(GUI_TARGET) $(GUI_TARGET).exe $(SAN_TARGET) $(SAN_TARGET).exe $(FREE_OBJS) kernel.pe kernel.bin $(IMAGE)
