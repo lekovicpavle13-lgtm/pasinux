@@ -117,19 +117,56 @@ def fat12_cluster_lba(cluster: int) -> int:
     return DATA_LBA + (cluster - 2) * SECTORS_PER_CLUSTER
 
 
-def build_image(boot: bytes, kernel: bytes) -> bytearray:
-    """Assemble the full 1.44 MB floppy image."""
+def split_83(name: str) -> tuple[bytes, bytes]:
+    """'NOTEPAD.BIN' -> (b'NOTEPAD ', b'BIN'); validates 8.3 limits."""
+    base, dot, ext = name.partition(".")
+    if not base or len(base) > 8 or len(ext) > 3 or ("." in ext):
+        raise SystemExit(f"--program: {name!r} is not a valid 8.3 name")
+    return base.upper().ljust(8).encode(), (ext.upper() if dot else "").ljust(3).encode()
+
+
+def chain_file(
+    fat: bytearray, start_cluster: int, size: int
+) -> int:
+    """Link ceil(size/sector) clusters starting at `start_cluster`; returns
+    the first cluster number after the chain."""
+    n_clusters = max(1, (size + BYTES_PER_SECTOR - 1) // BYTES_PER_SECTOR)
+    for i in range(n_clusters):
+        cluster = start_cluster + i
+        nxt = cluster + 1 if i < n_clusters - 1 else 0xFFF
+        fat12_write(fat, cluster, nxt)
+    return start_cluster + n_clusters
+
+
+def write_data_clusters(image: bytearray, data: bytes, start_cluster: int) -> None:
+    padded = data + b"\0" * ((-len(data)) % BYTES_PER_SECTOR)
+    for i in range(len(padded) // BYTES_PER_SECTOR):
+        off = fat12_cluster_lba(start_cluster + i) * BYTES_PER_SECTOR
+        image[off : off + BYTES_PER_SECTOR] = padded[
+            i * BYTES_PER_SECTOR : (i + 1) * BYTES_PER_SECTOR
+        ]
+
+
+def build_image(
+    boot: bytes, kernel: bytes, programs: list[tuple[str, bytes]] | None = None
+) -> bytearray:
+    """Assemble the full 1.44 MB floppy image.
+
+    `programs` are additional files placed in the root directory after
+    KERNEL.BIN, each as (display_name, content).
+    """
     image = bytearray(TOTAL_SECTORS * BYTES_PER_SECTOR)
+    programs = programs or []
 
     # --- Boot sector (LBA 0) -------------------------------------------------
     image[0 : BYTES_PER_SECTOR] = boot
 
     # --- FATs -----------------------------------------------------------------
-    n_clusters = (len(kernel) + BYTES_PER_SECTOR - 1) // BYTES_PER_SECTOR
-    if KERNEL_CLUSTER + n_clusters - 1 > TOTAL_CLUSTERS + 1:
+    n_kernel_clusters = (len(kernel) + BYTES_PER_SECTOR - 1) // BYTES_PER_SECTOR
+    if KERNEL_CLUSTER + n_kernel_clusters - 1 > TOTAL_CLUSTERS + 1:
         # highest usable cluster = TOTAL_CLUSTERS + 1 (clusters start at 2)
         raise SystemExit(
-            f"kernel needs {n_clusters} clusters; only "
+            f"kernel needs {n_kernel_clusters} clusters; only "
             f"{TOTAL_CLUSTERS} fit on a 1.44 MB floppy"
         )
 
@@ -139,35 +176,48 @@ def build_image(boot: bytes, kernel: bytes) -> bytearray:
     fat12_write(fat, 1, 0xFFF)  # cluster 1 reserved -> EOF
 
     # Chain KERNEL: cluster N -> N+1, last -> 0xFFF (EOF).
-    for i in range(n_clusters):
-        cluster = KERNEL_CLUSTER + i
-        nxt = cluster + 1 if i < n_clusters - 1 else 0xFFF
-        fat12_write(fat, cluster, nxt)
+    next_free = chain_file(fat, KERNEL_CLUSTER, len(kernel))
+
+    # --- Root directory (LBA 19) ----------------------------------------------
+    root_off = ROOT_DIR_LBA * BYTES_PER_SECTOR
+
+    def put_root_entry(slot: int, base: bytes, ext: bytes, cluster: int,
+                       size: int) -> None:
+        entry = bytearray(32)
+        entry[0:8] = base                      # 8.3 name (8)
+        entry[8:11] = ext                      # extension (3)
+        entry[11] = 0x20                       # archive attribute
+        entry[26:28] = struct.pack("<H", cluster)
+        entry[28:32] = struct.pack("<I", size)
+        off = root_off + slot * 32
+        image[off : off + 32] = entry
+
+    put_root_entry(0, b"KERNEL  ", b"BIN", KERNEL_CLUSTER, len(kernel))
+
+    # --- Extra programs (user-mode ELF binaries etc.) --------------------------
+    slot = 1
+    for display_name, content in programs:
+        base, ext = split_83(display_name)
+        if next_free > TOTAL_CLUSTERS + 1:
+            raise SystemExit(
+                f"no room on floppy for {display_name} "
+                f"({len(content)} bytes)"
+            )
+        first = next_free
+        next_free = chain_file(fat, first, len(content))
+        write_data_clusters(image, content, first)
+        put_root_entry(slot, base, ext, first, len(content))
+        slot += 1
+        if slot >= ROOT_ENTRIES:
+            raise SystemExit("root directory full")
 
     # Write both FAT copies.
     for f in range(NUM_FATS):
         off = (RESERVED_SECTORS + f * SECTORS_PER_FAT) * BYTES_PER_SECTOR
         image[off : off + len(fat)] = fat
 
-    # --- Root directory (LBA 19) ----------------------------------------------
-    root_off = ROOT_DIR_LBA * BYTES_PER_SECTOR
-    entry = bytearray(32)
-    entry[0:8] = b"KERNEL  "                      # 8.3 name (8)
-    entry[8:11] = b"BIN"                          # extension (3)
-    entry[11] = 0x20                              # archive attribute
-    entry[26:28] = struct.pack("<H", KERNEL_CLUSTER)
-    entry[28:32] = struct.pack("<I", len(kernel))
-    image[root_off : root_off + 32] = entry
-
     # --- Data area: write kernel clusters at their FAT-specified LBAs ----------
-    kernel_data = kernel + b"\0" * ((-len(kernel)) % BYTES_PER_SECTOR)
-    for i in range(n_clusters):
-        cluster = KERNEL_CLUSTER + i
-        off = fat12_cluster_lba(cluster) * BYTES_PER_SECTOR
-        chunk = kernel_data[i * BYTES_PER_SECTOR : (i + 1) * BYTES_PER_SECTOR]
-        if len(chunk) != BYTES_PER_SECTOR:
-            raise SystemExit("internal: cluster chunk wrong size")
-        image[off : off + BYTES_PER_SECTOR] = chunk
+    write_data_clusters(image, kernel, KERNEL_CLUSTER)
 
     return image
 
@@ -182,6 +232,15 @@ def main() -> int:
     # file now sets its own size; the arg is accepted and ignored.
     parser.add_argument("--kernel-sectors", type=int, default=100,
                         help="(retained for Makefile compat; ignored)")
+    parser.add_argument(
+        "--program",
+        action="append",
+        nargs=2,
+        metavar=("NAME", "FILE"),
+        default=[],
+        help="extra 8.3-named file to place in the root directory "
+        "(repeatable), e.g. --program NOTEPAD.BIN NOTEPAD.elf",
+    )
     args = parser.parse_args()
 
     boot = make_boot_sector(args.boot.read_bytes())
@@ -204,7 +263,11 @@ def main() -> int:
     args.kernel_bin.write_bytes(bytes(flat))
     print(f"wrote {args.kernel_bin} ({len(flat)} bytes)")
 
-    image = build_image(boot, flat)
+    programs = [(name, Path(path).read_bytes()) for name, path in args.program]
+    for name, content in programs:
+        print(f"program {name}: {len(content)} bytes")
+
+    image = build_image(boot, flat, programs)
     args.image.write_bytes(image)
     print(
         f"wrote {args.image}: {TOTAL_SECTORS} sectors, "
