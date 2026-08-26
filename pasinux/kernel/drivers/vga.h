@@ -16,4 +16,7 @@ void vga_set_cursor(size_t row, size_t col);
 void vga_write(size_t row, size_t col, const char* text);
 void vga_write_u32(size_t row, size_t col, const char* prefix, uint32_t value);
 
+void vga_putc_attr(char c, uint8_t attr);
+void vga_cell(size_t row, size_t col, char c, uint8_t attr);
+
 #endif

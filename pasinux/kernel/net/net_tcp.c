@@ -40,19 +40,25 @@ static uint16_t tcp_checksum(const tcp_pseudo_t* pseudo, const uint8_t* tcp_seg,
                              uint16_t seg_len) {
     uint32_t sum = 0u;
 
-    /* Sum pseudo-header (6 half-words) */
-    const uint16_t* p = (const uint16_t*)pseudo;
+    /* Sum pseudo-header (6 half-words). Read via memcpy instead of
+     * reinterpreting a packed struct pointer (alignment 1) as uint16_t*
+     * (alignment 2) — that cast both risks an unaligned access and trips
+     * -Werror=address-of-packed-member. */
+    const uint8_t* pb = (const uint8_t*)pseudo;
     for (uint32_t i = 0u; i < 6u; ++i) {
-        sum += p[i];
+        uint16_t word;
+        __builtin_memcpy(&word, pb + (i * 2u), sizeof(word));
+        sum += word;
     }
 
-    /* Sum TCP segment */
+    /* Sum TCP segment. Same memcpy approach — tcp_seg was never
+     * misaligned itself, but this keeps both loops consistent and drops
+     * the may_alias typedef in favor of the more standard memcpy idiom. */
     uint32_t words = (uint32_t)((seg_len + 1u) / 2u);  /* round up to half-words */
-    const uint16_t* s = (const uint16_t*)tcp_seg;
     for (uint32_t i = 0u; i < words; ++i) {
-        /* Use may_alias to avoid strict-aliasing issues */
-        typedef uint16_t __attribute__((__may_alias__)) u16_alias;
-        sum += ((const u16_alias*)s)[i];
+        uint16_t word;
+        __builtin_memcpy(&word, tcp_seg + (i * 2u), sizeof(word));
+        sum += word;
     }
 
     /* Fold 32-bit sum to 16 bits */

@@ -28,7 +28,7 @@
 #define RTL_RCR      0x44u   /* RX config */
 #define RTL_9346CR   0x50u   /* EEPROM control */
 #define RTL_CONFIG1  0x52u   /* config 1 */
-#define RTL_CR       0x52u   /* command register (same port as CONFIG1) */
+#define RTL_CR       0x37u   /* command register */
 #define RTL_MSR      0x58u   /* media status */
 #define RTL_BMCR     0x5Au   /* basic mode control (PHY) */
 
@@ -74,6 +74,7 @@ typedef struct {
     uint8_t* tx_buffers[RTL_NUM_TX_DESC]; /* kmalloc'd TX buffers (virtual) */
     uint32_t tx_buffer_phys[RTL_NUM_TX_DESC]; /* physical for each */
     uint8_t  tx_cur;           /* current TX descriptor index */
+    uint8_t  tx_busy[RTL_NUM_TX_DESC]; /* descriptor awaiting completion */
     uint32_t rx_offset;        /* current read offset in RX ring */
     uint32_t packet_count;     /* statistics */
     uint32_t byte_count;

@@ -44,11 +44,12 @@ bpb_fs_type     db 'FAT12   '          ; 8 bytes
 
 KERNEL_LOAD_ADDR equ 0x10000      ; flat: 0x1000:0  (must match linker.ld)
 
-; Real-mode scratch segments. These live above the kernel's load target
-; (0x10000 up to ~0x1C800 with a 100-sector kernel) and below 1 MiB, so
-; neither the root dir nor the FAT collides with the load.
-ROOT_SEG       equ 0x2000         ; root directory buffer  (0x20000)
-FAT_SEG        equ 0x2000         ; FAT buffer, reused after the search
+; Real-mode scratch segments. These live above the kernel's load area and
+; below 1 MiB, so neither the root dir nor the FAT collides with the load.
+; Scratch starts at 0x30000, giving the kernel room up to 0x20000 bytes
+; (256 sectors / ~128 KB) before any overlap could occur.
+ROOT_SEG       equ 0x3000         ; root directory buffer  (0x30000)
+FAT_SEG        equ 0x3000         ; FAT buffer, reused after the search
 KERNEL_SEGMENT equ 0x1000         ; kernel load segment     (0x1000:0 = 0x10000)
 
 BYTES_PER_SECTOR equ 512
@@ -103,6 +104,8 @@ start:
     mov ax, KERNEL_SEGMENT
     mov es, ax
     xor di, di                    ; es:di = kernel load pointer
+    mov ax, FAT_SEG
+    mov gs, ax                    ; next_cluster reads the FAT via GS
     mov bp, [first_cluster]       ; bp = current cluster
 
 .load_loop:
@@ -118,17 +121,21 @@ start:
     jc  boot_error
 
     add di, BYTES_PER_SECTOR
+    ; normalize es:di so the offset never crosses a 64K boundary
+    mov ax, di
+    shr ax, 4
+    mov dx, es
+    add dx, ax
+    mov es, dx
+    and di, 0xF
 
     ; next = FAT[cluster]
     mov ax, bp
-    call next_cluster             ; ax = next cluster
+    call next_cluster             ; ax = next cluster (GS-based, ES intact)
     cmp ax, 0x0FF8                ; >= 0xFF8 marks end-of-chain
     jae .done
 
     mov bp, ax
-    ; next_cluster clobbered es; restore the load segment.
-    mov ax, KERNEL_SEGMENT
-    mov es, ax
     jmp .load_loop
 .done:
     jmp switch_to_pmode
@@ -172,17 +179,15 @@ find_kernel:
 
 ; ---------------------------------------------------------------------------
 ; next_cluster: cluster in ax, returns next cluster in ax.
-; Uses the FAT already cached at FAT_SEG.
-; clobbers: bx, cx, dx, es
+; Uses the FAT already cached at FAT_SEG (read via GS; ES is preserved).
+; clobbers: bx, cx, dx
 ; ---------------------------------------------------------------------------
 next_cluster:
     mov cx, ax                    ; save cluster (parity check after clobbering)
     mov bx, ax
     shr bx, 1
     add bx, ax                    ; bx = byte offset = cluster*3/2
-    mov ax, FAT_SEG
-    mov es, ax
-    mov dx, [es:bx]               ; 16 bits spanning the 12-bit field
+    mov dx, [gs:bx]               ; 16 bits spanning the 12-bit field
     test cx, 1                    ; cluster odd?
     jnz .odd
     and dx, 0x0FFF

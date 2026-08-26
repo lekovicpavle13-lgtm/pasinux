@@ -140,3 +140,26 @@ void vga_write_u32(size_t row, size_t col, const char* prefix, uint32_t value) {
     buf[n] = '\0';
     vga_write(row, col, buf);
 }
+
+void vga_putc_attr(char c, uint8_t attr) {
+    if (g_vga_row < VGA_HEIGHT && g_vga_col < VGA_WIDTH) {
+        vga_mem[g_vga_row * VGA_WIDTH + g_vga_col] = (uint16_t)((attr << 8) | (uint8_t)c);
+        g_vga_col++;
+    }
+    if (g_vga_col >= VGA_WIDTH) {
+        g_vga_col = 0;
+        g_vga_row++;
+    }
+    while (g_vga_row >= VGA_HEIGHT) {
+        vga_scroll();
+        if (g_vga_row > 0u) g_vga_row--;
+    }
+    vga_update_cursor();
+}
+
+void vga_cell(size_t row, size_t col, char c, uint8_t attr) {
+    if (row >= VGA_HEIGHT || col >= VGA_WIDTH) {
+        return;
+    }
+    vga_mem[row * VGA_WIDTH + col] = (uint16_t)((attr << 8) | (uint8_t)c);
+}

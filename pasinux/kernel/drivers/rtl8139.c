@@ -20,12 +20,20 @@ static inline uint8_t rtl_inb(rtl8139_t* nic, uint16_t reg) {
     return inb((uint16_t)(nic->io_base + reg));
 }
 
+static inline uint16_t rtl_inw(rtl8139_t* nic, uint16_t reg) {
+    return inw((uint16_t)(nic->io_base + reg));
+}
+
 static inline uint32_t rtl_inl(rtl8139_t* nic, uint16_t reg) {
     return inl((uint16_t)(nic->io_base + reg));
 }
 
 static inline void rtl_outb(rtl8139_t* nic, uint16_t reg, uint8_t value) {
     outb((uint16_t)(nic->io_base + reg), value);
+}
+
+static inline void rtl_outw(rtl8139_t* nic, uint16_t reg, uint16_t value) {
+    outw((uint16_t)(nic->io_base + reg), value);
 }
 
 static inline void rtl_outl(rtl8139_t* nic, uint16_t reg, uint32_t value) {
@@ -62,7 +70,8 @@ static void rtl_print_mac(rtl8139_t* nic) {
     buf[13] = digits[nic->mac[4] & 0x0Fu];
     buf[14] = ':';
     buf[15] = digits[(nic->mac[5] >> 4) & 0x0Fu];
-    buf[16] = '\0';
+    buf[16] = digits[nic->mac[5] & 0x0Fu];
+    buf[17] = '\0';
     serial_puts(" MAC ");
     serial_puts(buf);
     vga_puts(" MAC ");
@@ -85,11 +94,11 @@ void rtl8139_irq_handler(void) {
     rtl8139_t* nic = &g_nic;
     if (nic->io_base == 0u) return;
 
-    uint16_t isr = (uint16_t)(rtl_inl(nic, RTL_ISR) & 0xFFFFu);
+    uint16_t isr = rtl_inw(nic, RTL_ISR);
     if (isr == 0u) return;
 
     /* Clear ISR by writing back */
-    rtl_outl(nic, RTL_ISR, isr);
+    rtl_outw(nic, RTL_ISR, isr);
 
     if (isr & RTL_ISR_ROK) {
         ++nic->packet_count;
@@ -118,6 +127,7 @@ int rtl8139_init(uint16_t pci_addr, rtl8139_t* nic) {
     for (uint32_t i = 0u; i < RTL_NUM_TX_DESC; ++i) {
         nic->tx_buffers[i] = (uint8_t*)0;
         nic->tx_buffer_phys[i] = 0u;
+        nic->tx_busy[i] = 0u;
     }
 
     /* Read I/O base from BAR0 */
@@ -177,7 +187,7 @@ int rtl8139_init(uint16_t pci_addr, rtl8139_t* nic) {
     rtl_outl(nic, RTL_RCR, RTL_RCR_AB | RTL_RCR_APM);
 
     /* Set interrupt mask: RX OK + TX OK + errors */
-    rtl_outl(nic, RTL_IMR, RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RX_OVW);
+    rtl_outw(nic, RTL_IMR, RTL_ISR_ROK | RTL_ISR_TOK | RTL_ISR_RER | RTL_ISR_TER | RTL_ISR_RX_OVW);
 
     /* Enable RX and TX */
     rtl_outb(nic, RTL_CR, RTL_CR_TE | RTL_CR_RE);
@@ -195,15 +205,18 @@ int rtl8139_send(rtl8139_t* nic, const uint8_t* data, uint16_t len) {
     uint8_t desc = nic->tx_cur;
     uint32_t tsd_addr = (uint32_t)(RTL_TSD0 + desc * 4u);
 
-    /* Wait for previous TX on this descriptor to complete */
-    uint32_t timeout = 0u;
-    while (rtl_inl(nic, (uint16_t)tsd_addr) & RTL_TSD_OWN) {
-        ++timeout;
-        if (timeout > 100000u) {
-            serial_puts("[RTL] TX timeout on desc ");
-            serial_put_u32(desc);
-            serial_puts("\n");
-            return -1;
+    /* If this descriptor still has a pending transfer, wait for completion:
+     * the chip sets TOK/TUN and re-marks the descriptor host-owned when done. */
+    if (nic->tx_busy[desc]) {
+        uint32_t timeout = 0u;
+        while (!(rtl_inl(nic, (uint16_t)tsd_addr) & (RTL_TSD_TOK | RTL_TSD_TUN))) {
+            ++timeout;
+            if (timeout > 1000000u) {
+                serial_puts("[RTL] TX timeout on desc ");
+                serial_put_u32(desc);
+                serial_puts("\n");
+                return -1;
+            }
         }
     }
 
@@ -216,13 +229,12 @@ int rtl8139_send(rtl8139_t* nic, const uint8_t* data, uint16_t len) {
         dst[i] = ((u32_alias*)src)[i];
     }
 
-    /* Set TX buffer address (only on first use or if changed) */
+    /* Set TX buffer address, then write TSD: the write itself clears
+     * ownership bits and starts the transfer. */
     rtl_outl(nic, (uint16_t)(RTL_TSAD0 + desc * 4u), nic->tx_buffer_phys[desc]);
+    rtl_outl(nic, (uint16_t)tsd_addr, (uint32_t)(len & RTL_TSD_SIZE_MASK));
 
-    /* Write TX command: size | OWN bit (0x3000 = no early TX, clear to start) */
-    /* OWN bit = 0x2000 — for RTL8139, clear OWN by writing size */
-    rtl_outl(nic, (uint16_t)tsd_addr, (uint32_t)len);
-
+    nic->tx_busy[desc] = 1u;
     nic->tx_cur = (uint8_t)((nic->tx_cur + 1u) % RTL_NUM_TX_DESC);
     nic->byte_count += len;
     return 0;

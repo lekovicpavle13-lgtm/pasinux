@@ -26,4 +26,6 @@ uint16_t keyboard_readline_vga(char* buf, uint16_t len);
 
 int keyboard_available(void);
 
+void keyboard_set_tui_mode(int enable);
+
 #endif

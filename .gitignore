@@ -16,3 +16,17 @@ __pycache__/
 # QEMU / test scratch
 qemu_*.txt
 qemu_*.log
+# pasinux kernel scratch: screenshots, QEMU logs, test artifacts, VM disks
+pasinux/kernel/*.ppm
+pasinux/kernel/qp*.txt
+pasinux/kernel/qlog*.txt
+pasinux/kernel/*serial*.txt
+pasinux/kernel/tui_serial*.txt
+pasinux/kernel/boot_check.txt
+pasinux/kernel/dbg_s.txt
+pasinux/kernel/*.vdi
+pasinux/kernel/*.png
+pasinux/kernel/NOTEPAD.elf
+pasinux/kernel/test_*.txt
+pasinux/kernel/test_*.ppm
+.claude/

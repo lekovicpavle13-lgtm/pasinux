@@ -52,11 +52,10 @@ static const uint8_t scancode_shifted[128] = {
 static volatile uint8_t g_keybuf[KEYBUF_SIZE];
 static volatile uint16_t g_keybuf_head;
 static volatile uint16_t g_keybuf_tail;
-
 static volatile uint8_t g_shift;    
 static volatile uint8_t g_alt;      
 static volatile uint8_t g_ctrl;     
-
+static volatile int g_tui_mode = 0;
 
 
 
@@ -101,6 +100,10 @@ void keyboard_irq(void) {
     if ((status & 0x01u) == 0u) {
         return;               
     }
+    /* Bit 5 set = mouse data waiting; leave it for the mouse IRQ handler. */
+    if ((status & 0x20u) != 0u) {
+        return;
+    }
 
     uint8_t sc = inb(0x60);    
     uint8_t is_break = (sc & 0x80u) != 0u;
@@ -140,9 +143,19 @@ void keyboard_irq(void) {
         ascii = (uint8_t)(ascii - 'a' + 1u);
     }
 
+    if (g_tui_mode) {
+        extern void tui_wm_post_key(uint8_t ascii, uint8_t scancode, uint8_t alt, uint8_t ctrl, uint8_t shift);
+        tui_wm_post_key(ascii, code, g_alt, g_ctrl, g_shift);
+        return;
+    }
+
     if (ascii != 0u) {
         if (ascii != KEY_BACKSP) { buf_put(ascii); }
     }
+}
+
+void keyboard_set_tui_mode(int enable) {
+    g_tui_mode = enable ? 1 : 0;
 }
 
 uint8_t keyboard_getc(void) {

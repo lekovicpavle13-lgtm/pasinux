@@ -14,6 +14,12 @@ const char* sched_fs_current_name(void);
 
 void sched_fs_create_process(const char* name, void (*entry)(void), uint8_t priority);
 
+/* Suspend/resume preemption while a foreground ring-3 program runs. */
+void sched_fs_preempt_enable(int enable);
+
+/* Reload CR3 with the kernel page directory (after leaving user mode). */
+void sched_fs_restore_kernel_cr3(void);
+
 void sched_fs_run(uint32_t ticks);
 
 #endif

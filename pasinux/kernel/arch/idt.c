@@ -61,6 +61,21 @@ static void pic_remap(void) {
     outb(0xA1, 0xFF);
 }
 
+void pic_unmask_irq(uint8_t irq) {
+    uint16_t port;
+    uint8_t value;
+    
+    if (irq < 8) {
+        port = 0x21;
+    } else {
+        port = 0xA1;
+        irq -= 8;
+    }
+    
+    value = inb(port) & ~(1 << irq);
+    outb(port, value);
+}
+
 void idt_init(void) {
     for (uint32_t i = 0; i < IDT_ENTRIES; ++i) {
         idt_set_gate((uint8_t)i, isr_stub_table[0], 0u, 0);
