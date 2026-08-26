@@ -1,4 +1,3 @@
-#Contributing
 
-jameswalker243
+jameswalker243                                                                                                                                                  
 lekovicpavle13-lgtm
