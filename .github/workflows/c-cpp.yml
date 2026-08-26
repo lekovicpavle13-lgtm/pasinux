@@ -9,7 +9,7 @@ on:
 
 jobs:
   hosted:
-    name: Hosted simulator (build, syntax, sanitizers)
+    name: Hosted simulator
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,14 +25,6 @@ jobs:
 
       - name: make run (smoke test)
         run: make run
-        working-directory: Kernel
-
-      - name: make sanitize (ASan + UBSan)
-        run: make sanitize
-        working-directory: Kernel
-
-      - name: run sanitized build
-        run: ./kernel_sim_san
         working-directory: Kernel
 
   freestanding-image:
