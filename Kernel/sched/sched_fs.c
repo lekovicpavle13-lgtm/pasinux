@@ -40,6 +40,7 @@ static volatile uint32_t g_sched_ticks;
 static volatile uint32_t g_switches;
 static volatile uint32_t g_slice_left;
 static volatile int g_need_switch;
+static volatile int g_preempt_enabled = 1;
 static uint32_t g_kernel_cr3;
 
 static void copy_name(char* dst, const char* src) {
@@ -126,7 +127,7 @@ void sched_fs_on_tick(void) {
 }
 
 uint32_t sched_fs_maybe_switch(uint32_t current_esp) {
-    if (!g_need_switch || !g_current || g_nprocs < 2u) {
+    if (!g_need_switch || !g_current || g_nprocs < 2u || !g_preempt_enabled) {
         return 0;
     }
 
@@ -137,13 +138,26 @@ uint32_t sched_fs_maybe_switch(uint32_t current_esp) {
     uint32_t idx = (uint32_t)(g_current - g_procs);
     idx = (idx + 1u) % g_nprocs;
     g_current = &g_procs[idx];
-    if (g_current->cr3 != g_kernel_cr3) {
-        __asm__ volatile ("mov %0, %%cr3" : : "r"(g_current->cr3));
-    }
+    /* Always reload CR3: the outgoing process may have run on its own
+     * address space (user program), and skipping the load would leave the
+     * kernel running on stale page tables. */
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(g_current->cr3));
 
     ++g_switches;
 
     return g_current->esp;
+}
+
+void sched_fs_preempt_enable(int enable) {
+    if (enable) {
+        g_slice_left = TIME_SLICE;
+        g_need_switch = 0;
+    }
+    g_preempt_enabled = enable ? 1 : 0;
+}
+
+void sched_fs_restore_kernel_cr3(void) {
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(g_kernel_cr3));
 }
 
 uint32_t sched_fs_ticks(void) {
