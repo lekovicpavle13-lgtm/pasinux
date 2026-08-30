@@ -1,4 +1,4 @@
-﻿#include "ata.h"
+#include "ata.h"
 #include "driver_fs.h"
 #include "fat12.h"
 #include "gdt.h"
@@ -25,7 +25,7 @@
 #include "tui_wm.h"
 #include "widgets.h"
 #include "vga.h"
-#include <stdint.h>
+#include "io.h"
 
 extern void launch_ring3(void *entry, void *user_stack_top);
 extern char user_start[];
