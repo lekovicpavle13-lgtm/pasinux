@@ -1,0 +1,101 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  hosted:
+    name: Hosted simulator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: gcc version
+        run: gcc --version
+
+      - run: sudo apt-get update && sudo apt-get install -y build-essential nasm gcc-multilib qemu-system-x86 mtools
+
+      - name: make (kernel_sim)
+        run: make
+        working-directory: Kernel
+
+      - name: make run (smoke test)
+        run: make run
+        working-directory: Kernel
+
+  freestanding-image:
+    name: Freestanding kernel (image build + boot smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nasm + qemu + 32-bit toolchain headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm qemu-system-x86 gcc-multilib
+
+      - name: Tool versions
+        run: |
+          nasm -v
+          qemu-system-i386 --version
+          ld --version | head -1
+
+      - name: make image (kernel.pe -> kernel.bin -> pasinux.img)
+        run: make image
+        working-directory: Kernel
+
+      - name: Boot in headless QEMU and capture serial log
+        run: timeout 20 make qemu-headless > boot.log 2>&1 || true
+        working-directory: Kernel
+
+      - name: Show serial log
+        if: always()
+        run: |
+          if [ -f Kernel/boot.log ]; then
+            cat Kernel/boot.log
+          else
+            echo "No boot.log — 'make image' (or an earlier step) failed before boot could even run."
+            echo "Check the 'make image' step above for the actual compiler/linker/python error."
+            exit 1
+          fi
+
+      - name: Assert boot reached FAT12 + timer + no panics
+        run: |
+          cd Kernel
+          fail=0
+          for marker in \
+            "\[KERNEL\] pasinux freestanding kernel booting" \
+            "\[IDT\] IDT loaded, PIC remapped" \
+            "\[FS\] FAT12 mounted OK" \
+            "\[FS\] write selftest: OK" \
+            "\[PIT\] heartbeat=.*CHANGED"; do
+            if ! grep -qE "$marker" boot.log; then
+              echo "MISSING expected marker: $marker"
+              fail=1
+            fi
+          done
+          if grep -qE "\[PANIC\]|FAILED|DATA MISMATCH" boot.log; then
+            echo "Found a failure/panic marker in boot log"
+            fail=1
+          fi
+          exit $fail
+
+      - name: Upload boot log
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: Kernel/boot.log
+
+      - name: Upload disk image
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: pasinux-img
+          path: Kernel/pasinux.img

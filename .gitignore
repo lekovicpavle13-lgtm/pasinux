@@ -1,19 +1,40 @@
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
 
-# ---- build artifacts (regenerable; keep the repo source-only) ----
+# ---- Makefile build output ----
+build/
+*.bin
+*.elf
+*.img
+*.iso
+*.map
+
+# ---- Object / intermediate files ----
 *.o
 *.obj
+*.a
+*.lib
+*.d
+*.i
+*.s
+*.lst
 *.pe
-*.exe
-*.img
-*.bin
-*.map
-*.log
 *.orig
 __pycache__/
 
-# QEMU / test scratch
+# ---- Hosted-simulator / native test binaries ----
+kernel_sim
+kernel_sim.exe
+*.exe
+*.out
+
+# ---- Debugging ----
+.gdb_history
+.gdbinit.local
+*.qemu.log
+*.log
+
+# ---- QEMU / test scratch ----
 qemu_*.txt
 qemu_*.log
 # pasinux kernel scratch: screenshots, QEMU logs, test artifacts, VM disks
@@ -29,4 +50,18 @@ pasinux/kernel/*.png
 pasinux/kernel/NOTEPAD.elf
 pasinux/kernel/test_*.txt
 pasinux/kernel/test_*.ppm
+
+# ---- Optional: local cross-compiler build ----
+# cross/
+# opt/cross/
+
+# ---- Editors / IDEs / OS cruft ----
+.vscode/
+.idea/
 .claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
