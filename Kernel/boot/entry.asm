@@ -44,7 +44,7 @@ _start:
     mov edi, eax                        ; EDI = PD phys (saved for CR3)
 
     mov ebx, _page_table
-    sub ebx, HIGHER_HALF_OFFSET         ; EBX = phys addr of page table
+    sub ebx, HIGHER_HALF_OFFSET         ; EBX = PT phys
 
     ; Populate page table: identity-map physical 0 -> 4 MB
     ; PT[i] = (i * 4096) | PRESENT | WRITABLE | USER
@@ -63,9 +63,9 @@ _start:
     or  edx, 0x003
     mov [edi], edx
 
-    ; PDE[768] = 4 MB page at phys 0 | PRESENT | WRITABLE | USER | PS (0x87)
-    ; Maps 0xC0000000 -> physical 0x00000000 (kernel + ring-3 test code)
-    mov dword [edi + 768 * 4], 0x00000087
+    ; PDE[768] = 4 MB page at phys 0 | PRESENT | WRITABLE | PS
+    ; Supervisor-only: user processes must not inherit this mapping.
+    mov dword [edi + 768 * 4], 0x00000083
 
     ; ----------------------------------------------------------------
     ; Phase 3 — Enable paging
@@ -96,9 +96,9 @@ _start_higher_half:
     mov eax, _page_directory
     mov dword [eax], 0
 
-    ; Invlpg the first page to flush the stale TLB entry
-    xor eax, eax
-    invlpg [eax]
+    ; Reload CR3 to flush the stale identity mapping from the TLB.
+    mov eax, cr3
+    mov cr3, eax
 
     ; ----------------------------------------------------------------
     ; Phase 6 — Set up stack and enter C kernel
