@@ -41,6 +41,12 @@ pasinux started as a boot sector that could barely prove it was alive, and has g
 | ![Early pasinux boot: PM, IDT/PIT, preemptive OK](asssets/old_qemu-boot.png) | ![pasinux VGA shell with PCI, ring-3, scheduler, and RTL8139 all up](asssets/new_qemu_boot.png) | ![pasinux booting in Oracle VirtualBox from a converted VDI disk](asssets/oracle_vm_boot_.png) |
 | `boot -> PM -> IDT/PIT -> preemptive OK` | `pasinux VGA shell ready` — PCI devices enumerated, ring-3 test passed, scheduler running 3 procs, RTL8139 NIC active | Same shell, same command set — running as `pasinux [Running]` on a VirtualBox VM with "Boot Order: Hard Disk" |
 
+And most recently — a real desktop:
+
+![pasinux v0.1 desktop: overlapping window manager with taskbar, About/Clock windows, and Shell running as a window](asssets/newer_qemu.png)
+
+`pasinux v0.1 desktop` — an overlapping text-mode window manager (`tui/tui_wm.c`, `tui/tui_core.c`) with a taskbar-style launcher (Terminal, Notepad, Files, Monitor, About, Clock), the **About** and **Clock** windows open by default and overlapping, a real-time clock window backed by the new CMOS RTC driver (`drivers/rtc.c`), and the shell rebuilt to run as a window (`tui/shell.c`) with a taskbar at the bottom listing open windows.
+
 ---
 
 ## Two ways to run pasinux
@@ -441,7 +447,9 @@ This is a meaningful step beyond QEMU: it's the first time pasinux has booted th
 - [ ] Confirm the FAT12 persistence-marker self-test actually survives a real reboot (VM power-cycle or QEMU restart on the same image), not just a fresh image build
 - [ ] Nested directories in FAT12 (currently `mkdir` creates a real subdirectory, but files-under-folders is out of scope)
 - [ ] Testing on real hardware, beyond QEMU and VirtualBox
-- [ ] Text-mode UI: overlapping window manager, PS/2 mouse driver, CMOS RTC clock, reusable TUI toolkit (design approved; tracked as an open feature issue)
+- [x] Text-mode UI: overlapping window manager (`tui/tui_wm.c`, `tui/tui_core.c`), PS/2 mouse driver (`drivers/ps2mouse.c`), CMOS RTC clock (`drivers/rtc.c`), shell rebuilt as a window (`tui/shell.c`) — wired into `kmain()`'s boot sequence
+- [ ] A second, fully-duplicated build tree at `pasinux/kernel/` has reappeared alongside `Kernel/`, with files that have already diverged from their `Kernel/` counterparts (e.g. `arch/idt.c`, `net/net_tcp.c`, `sched/sched_fs.c`) — needs reconciling before it causes an edit-the-wrong-copy bug
+- [ ] Newly-added `fs/elf.c` and `mm/pmm.c` aren't documented anywhere in this README yet
 
 ---
 
